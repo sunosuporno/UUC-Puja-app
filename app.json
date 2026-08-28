@@ -1,9 +1,9 @@
 {
   "expo": {
-    "name": "uuc-pujo-coupons",
+    "name": "UUC Pujo Coupons",
     "slug": "uuc-pujo-coupons",
     "version": "1.0.0",
-    "orientation": "portrait",
+    "orientation": "default",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
     "ios": {
