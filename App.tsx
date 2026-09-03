@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { Picker } from "@react-native-picker/picker";
 import QRCode from "react-native-qrcode-svg";
 import {
+  Image,
   Platform,
   Pressable,
   SafeAreaView,
@@ -824,10 +825,16 @@ export default function App() {
           showsVerticalScrollIndicator={false}
         >
           <View style={styles.sun} />
+          <View style={styles.homeLogoBadge}>
+            <Image
+              source={require("./assets/udita-logo.jpeg")}
+              resizeMode="contain"
+              style={styles.homeLogo}
+            />
+          </View>
           <View style={styles.welcomeStack}>
             <View style={styles.welcomeContent}>
-              <Text style={styles.kicker}>UUC COMMUNITY CELEBRATION</Text>
-              <Text style={styles.welcomeTitle}>Pujo on a plate.</Text>
+              <Text style={styles.kicker}>UDITA UTSAB COMMUNITY CELEBRATION</Text>
               <Text style={styles.welcomeTitleAccent}>Joy in every meal.</Text>
               <Text style={styles.welcomeBody}>
                 Reserve food coupons for Durga Pujo 2026, from Sashthi through
@@ -1045,6 +1052,7 @@ export default function App() {
                 style={({ pressed }) => [
                   styles.primaryButton,
                   styles.actionButton,
+                  styles.primaryActionButton,
                   (donationSelected
                     ? !canContinueWithDonation
                     : !canCheckApartment || isCheckingEligibility) &&
@@ -1969,7 +1977,7 @@ export default function App() {
               const takeawayExtra = meal.takeawayPrice - meal.dineInPrice;
               const takeawayPriceHint =
                 takeawayExtra > 0
-                  ? `+${currency(takeawayExtra)} extra`
+                  ? `${currency(takeawayExtra)} extra`
                   : takeawayExtra < 0
                   ? `${currency(Math.abs(takeawayExtra))} less`
                   : "no extra";
@@ -2010,7 +2018,7 @@ export default function App() {
                       <View>
                         <Text style={styles.serviceLabel}>Takeaway</Text>
                         <Text style={styles.servicePrice}>
-                          {currency(meal.takeawayPrice)} · {takeawayPriceHint}
+                          {currency(meal.takeawayPrice)} ({takeawayPriceHint})
                         </Text>
                       </View>
                       <QuantityControl
@@ -2206,6 +2214,26 @@ const styles = StyleSheet.create({
   },
   welcomeStack: { maxWidth: 620, width: "100%" },
   welcomeContent: { maxWidth: 620 },
+  homeLogoBadge: {
+    alignItems: "center",
+    backgroundColor: "#FFF8EC",
+    borderColor: "rgba(244, 192, 91, 0.78)",
+    borderRadius: 14,
+    borderWidth: 1,
+    height: 86,
+    justifyContent: "center",
+    overflow: "hidden",
+    paddingHorizontal: 12,
+    position: "absolute",
+    right: 60,
+    top: 46,
+    width: 148,
+    zIndex: 2,
+  },
+  homeLogo: {
+    height: 74,
+    width: 124,
+  },
   kicker: {
     color: "#F7DFA7",
     fontSize: 12,
@@ -2290,9 +2318,9 @@ const styles = StyleSheet.create({
   welcomeActions: {
     alignItems: "center",
     flexDirection: "row",
-    flexWrap: "wrap",
-    gap: 12,
+    gap: 10,
     marginTop: 28,
+    width: "100%",
   },
   creatorFooter: {
     alignItems: "center",
@@ -2357,12 +2385,14 @@ const styles = StyleSheet.create({
     gap: 18,
     backgroundColor: "#F4C05B",
     borderRadius: 4,
+    minHeight: 72,
     paddingHorizontal: 22,
-    paddingVertical: 18,
+    paddingVertical: 0,
     marginBottom: 18,
     marginTop: 28,
   },
   actionButton: { marginBottom: 0, marginTop: 0 },
+  primaryActionButton: { alignSelf: "stretch", flex: 1.35, justifyContent: "center" },
   primaryButtonDisabled: { backgroundColor: "#CBAF72" },
   primaryButtonText: { color: "#541715", fontSize: 16, fontWeight: "800" },
   secondaryActionButton: {
@@ -2370,9 +2400,11 @@ const styles = StyleSheet.create({
     borderColor: "#F4C05B",
     borderRadius: 4,
     borderWidth: 1,
+    flex: 1,
+    minHeight: 72,
     justifyContent: "center",
-    paddingHorizontal: 20,
-    paddingVertical: 17,
+    paddingHorizontal: 14,
+    paddingVertical: 0,
   },
   secondaryActionButtonDisabled: { borderColor: "#B98D73", opacity: 0.55 },
   secondaryActionButtonText: {
