@@ -229,7 +229,6 @@ function QuantityControl({
 export default function App() {
   const [homeFontsLoaded] = useFonts({
     Avigea: require("./assets/fonts/Avigea.otf"),
-    AvigeaItalic: require("./assets/fonts/Avigea-Italic.otf"),
     Balooda2Medium: require("./assets/fonts/Balooda2-Medium.ttf"),
     Balooda2ExtraBold: require("./assets/fonts/Balooda2-ExtraBold.ttf"),
   });
@@ -1103,11 +1102,6 @@ export default function App() {
                   </View>
                 ) : null}
               </View>
-              <View style={styles.welcomeRule} />
-              <Text style={styles.welcomeNote}>
-                Individual coupons are valid at the listed rates until 11
-                October 2026.
-              </Text>
             </View>
             <View
               style={[
@@ -2302,26 +2296,26 @@ const styles = StyleSheet.create({
   welcomeContent: { maxWidth: 700 },
   homeLogoBadge: {
     alignItems: "center",
-    height: 100,
+    height: 150,
     justifyContent: "center",
     overflow: "hidden",
     position: "absolute",
-    right: 60,
-    top: 46,
-    width: 170,
+    right: 32,
+    top: 28,
+    width: 254,
     zIndex: 2,
   },
   homeLogo: {
-    height: 96,
-    width: 162,
+    height: 146,
+    width: 248,
   },
   phoneHomeLogoBadge: {
-    right: 46,
-    top: 52,
+    right: 20,
+    top: 32,
   },
   phoneHomeLogo: {
-    height: 86,
-    width: 146,
+    height: 132,
+    width: 224,
   },
   kicker: {
     color: "#F7DFA7",
@@ -2359,8 +2353,7 @@ const styles = StyleSheet.create({
     color: "#FFF7E9",
     fontFamily: displayFont,
     fontSize: 68,
-    fontWeight: "900",
-    letterSpacing: -1.5,
+    letterSpacing: 2.2,
     lineHeight: 61,
     position: "relative",
     zIndex: 1,
