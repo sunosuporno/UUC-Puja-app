@@ -5,6 +5,7 @@
   "dependencies": {
     "@react-native-picker/picker": "2.11.4",
     "expo": "~57.0.16",
+    "expo-font": "~57.0.3",
     "expo-status-bar": "~57.0.1",
     "react": "19.2.3",
     "react-dom": "19.2.3",

@@ -162,6 +162,8 @@ function validateBookingItems(value, payableAmount, donation) {
 }
 
 function validateSeasonPassBookingItem(item, seasonPassConfig) {
+  if (!seasonPassConfig) throw new Error('Season pass is not available in the Food Menu.');
+
   const includedDay = seasonPassConfig.includedDays.some((dayName) => slugify(dayName) === slugify(item.dayName));
   const includedDate = (seasonPassConfig.includedDates || []).some((dayDate) => normalizeDayDate(dayDate) === normalizeDayDate(item.dayDate));
   const expectedUnitPrice = seasonPassConfig.price / seasonPassConfig.includedDays.length;
@@ -751,7 +753,7 @@ function getFoodMenu() {
     if (!dayName && !mealTime) return;
     if (!dayName || !mealTime) throw new Error('Each food menu row needs both Day and Meal Time.');
 
-    const meals = buildFoodMenuMeals(row, dayName, mealTime);
+    const meals = buildFoodMenuMeals(row, dayName, dayDate, mealTime);
     if (!meals.length) return;
 
     if (dayIndexes[dayKey] === undefined) {
@@ -804,7 +806,7 @@ function getSeasonPassConfig() {
 
 function buildSeasonPassConfig(rows) {
   const seasonPassRow = rows.find(isSeasonPassMenuRow);
-  if (!seasonPassRow) return defaultSeasonPassConfig();
+  if (!seasonPassRow) return null;
 
   const mealType = String(seasonPassRow[1] || '').trim() || DEFAULT_SEASON_PASS_MEAL_TYPE;
   const includedDays = parseSeasonPassIncludedDays(seasonPassRow[2]);
@@ -855,14 +857,14 @@ function firstPositiveNumber(values) {
   return amount || 0;
 }
 
-function buildFoodMenuMeals(row, dayName, mealTime) {
+function buildFoodMenuMeals(row, dayName, dayDate, mealTime) {
   const meals = [];
-  addFoodMenuMeal(meals, dayName, mealTime, 'Veg', row[2], row[5], row[4]);
-  addFoodMenuMeal(meals, dayName, mealTime, 'Non-Veg', row[3], row[7], row[6]);
+  addFoodMenuMeal(meals, dayName, dayDate, mealTime, 'Veg', row[2], row[5], row[4]);
+  addFoodMenuMeal(meals, dayName, dayDate, mealTime, 'Non-Veg', row[3], row[7], row[6]);
   return meals;
 }
 
-function addFoodMenuMeal(meals, dayName, mealTime, foodType, menu, dineInPrice, takeawayPrice) {
+function addFoodMenuMeal(meals, dayName, dayDate, mealTime, foodType, menu, dineInPrice, takeawayPrice) {
   const menuText = String(menu || '').trim();
   if (!menuText) return;
 
@@ -873,7 +875,7 @@ function addFoodMenuMeal(meals, dayName, mealTime, foodType, menu, dineInPrice, 
   }
 
   meals.push({
-    id: `${slugify(dayName)}-${slugify(mealTime)}-${slugify(foodType)}`,
+    id: `${slugify(dayDate) || slugify(dayName)}-${slugify(dayName)}-${slugify(mealTime)}-${slugify(foodType)}`,
     mealTime,
     foodType,
     menu: menuText,

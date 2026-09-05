@@ -20,6 +20,9 @@
     },
     "web": {
       "favicon": "./assets/favicon-udita.png"
-    }
+    },
+    "plugins": [
+      "expo-font"
+    ]
   }
 }

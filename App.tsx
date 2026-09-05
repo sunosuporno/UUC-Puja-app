@@ -1,4 +1,5 @@
 import { StatusBar } from "expo-status-bar";
+import { useFonts } from "expo-font";
 import { useEffect, useState } from "react";
 import { Picker } from "@react-native-picker/picker";
 import QRCode from "react-native-qrcode-svg";
@@ -11,6 +12,7 @@ import {
   StyleSheet,
   Text,
   TextInput,
+  useWindowDimensions,
   View,
 } from "react-native";
 
@@ -73,7 +75,7 @@ type FoodMenuResponse = {
   ok?: boolean;
   menu?: {
     days?: Day[];
-    seasonPass?: SeasonPassConfig;
+    seasonPass?: SeasonPassConfig | null;
   };
   error?: string;
 };
@@ -160,7 +162,9 @@ const CREATOR_PHONE = "+91 62894 91245";
 
 const currency = (amount: number) => `Rs. ${amount.toLocaleString("en-IN")}`;
 
-function normalizeSeasonPassConfig(value: SeasonPassConfig | undefined) {
+function normalizeSeasonPassConfig(
+  value: SeasonPassConfig | null | undefined
+) {
   if (
     !value ||
     !Number.isFinite(value.price) ||
@@ -168,7 +172,7 @@ function normalizeSeasonPassConfig(value: SeasonPassConfig | undefined) {
     !Array.isArray(value.includedDays) ||
     value.includedDays.length === 0
   ) {
-    return DEFAULT_SEASON_PASS_CONFIG;
+    return null;
   }
 
   return {
@@ -223,6 +227,15 @@ function QuantityControl({
 }
 
 export default function App() {
+  const [homeFontsLoaded] = useFonts({
+    Avigea: require("./assets/fonts/Avigea.otf"),
+    AvigeaItalic: require("./assets/fonts/Avigea-Italic.otf"),
+    Balooda2Medium: require("./assets/fonts/Balooda2-Medium.ttf"),
+    Balooda2ExtraBold: require("./assets/fonts/Balooda2-ExtraBold.ttf"),
+  });
+  const { width } = useWindowDimensions();
+  const isPhoneWidth = width < 720;
+  const shouldStackHomeActions = width < 360;
   const [screen, setScreen] = useState<Screen>("phone");
   const [towerNumber, setTowerNumber] = useState("");
   const [apartmentNumber, setApartmentNumber] = useState("");
@@ -247,9 +260,8 @@ export default function App() {
   const [adminError, setAdminError] = useState("");
   const [isLoadingAdminSummary, setIsLoadingAdminSummary] = useState(false);
   const [days, setDays] = useState<Day[]>([]);
-  const [seasonPassConfig, setSeasonPassConfig] = useState<SeasonPassConfig>(
-    DEFAULT_SEASON_PASS_CONFIG
-  );
+  const [seasonPassConfig, setSeasonPassConfig] =
+    useState<SeasonPassConfig | null>(null);
   const [isMenuLoading, setIsMenuLoading] = useState(true);
   const [menuError, setMenuError] = useState("");
   const [seasonPasses, setSeasonPasses] = useState(0);
@@ -299,9 +311,11 @@ export default function App() {
 
         if (active) {
           setDays(result.menu.days);
-          setSeasonPassConfig(
-            normalizeSeasonPassConfig(result.menu.seasonPass)
+          const normalizedSeasonPass = normalizeSeasonPassConfig(
+            result.menu.seasonPass
           );
+          setSeasonPassConfig(normalizedSeasonPass);
+          if (!normalizedSeasonPass) setSeasonPasses(0);
           setMenuError("");
         }
       } catch (error) {
@@ -322,12 +336,14 @@ export default function App() {
 
   const getMealQuantities = (mealId: string) =>
     quantities[mealId] ?? { dineIn: 0, takeaway: 0 };
-  const currentSeasonPassPrice = seasonPassConfig.price;
-  const seasonPassLunchDays = seasonPassConfig.includedDays;
+  const hasSeasonPass = seasonPassConfig !== null;
+  const activeSeasonPasses = hasSeasonPass ? seasonPasses : 0;
+  const currentSeasonPassPrice = seasonPassConfig?.price ?? 0;
+  const seasonPassLunchDays = seasonPassConfig?.includedDays ?? [];
   const seasonPassMealType =
-    seasonPassConfig.mealType || DEFAULT_SEASON_PASS_CONFIG.mealType;
+    seasonPassConfig?.mealType || DEFAULT_SEASON_PASS_CONFIG.mealType;
   const seasonPassSubtitle =
-    seasonPassConfig.description ||
+    seasonPassConfig?.description ||
     `Includes ${seasonPassMealType.toLowerCase()} for ${seasonPassLunchDays.join(
       ", "
     )}`;
@@ -345,7 +361,7 @@ export default function App() {
         meal.takeawayPrice * quantity.takeaway
       );
     }, 0);
-  const couponTotal = seasonPasses * currentSeasonPassPrice + granularTotal;
+  const couponTotal = activeSeasonPasses * currentSeasonPassPrice + granularTotal;
   const total = couponTotal + (donationSelected ? DONATION_AMOUNT : 0);
   const individualBookingItems: BookingItemPayload[] = days
     .flatMap((day) =>
@@ -386,16 +402,18 @@ export default function App() {
     )
     .filter((item) => item.quantity > 0);
   const seasonPassUnitPrice =
-    currentSeasonPassPrice / seasonPassLunchDays.length;
+    seasonPassLunchDays.length > 0
+      ? currentSeasonPassPrice / seasonPassLunchDays.length
+      : 0;
   const seasonPassBookingItems: BookingItemPayload[] =
-    seasonPasses > 0
+    activeSeasonPasses > 0
       ? seasonPassLunchDays.map((dayName) => ({
           dayName,
           dayDate: days.find((day) => day.name === dayName)?.date || "",
           mealType: seasonPassMealType,
-          quantity: seasonPasses,
+          quantity: activeSeasonPasses,
           unitPrice: seasonPassUnitPrice,
-          lineTotal: seasonPassUnitPrice * seasonPasses,
+          lineTotal: seasonPassUnitPrice * activeSeasonPasses,
           source: "Season Pass" as const,
         }))
       : [];
@@ -417,13 +435,13 @@ export default function App() {
           },
         ]
       : []),
-    ...(seasonPasses > 0
+    ...(activeSeasonPasses > 0
       ? [
           {
             id: "season-pass",
             label: "Season pass",
-            quantity: seasonPasses,
-            subtotal: seasonPasses * currentSeasonPassPrice,
+            quantity: activeSeasonPasses,
+            subtotal: activeSeasonPasses * currentSeasonPassPrice,
           },
         ]
       : []),
@@ -479,7 +497,7 @@ export default function App() {
     donationSelected
       ? `Pujo donation x 1 (${currency(DONATION_AMOUNT)})`
       : null,
-    seasonPasses > 0 ? `Season pass x ${seasonPasses}` : null,
+    activeSeasonPasses > 0 ? `Season pass x ${activeSeasonPasses}` : null,
     ...mealBookingDetails,
   ]
     .filter((detail): detail is string => detail !== null)
@@ -487,8 +505,8 @@ export default function App() {
   const selectionSummary =
     [
       donationSelected ? "Pujo donation" : null,
-      seasonPasses > 0
-        ? `${seasonPasses} season ${seasonPasses === 1 ? "pass" : "passes"}`
+      activeSeasonPasses > 0
+        ? `${activeSeasonPasses} season ${activeSeasonPasses === 1 ? "pass" : "passes"}`
         : null,
       granularCount > 0
         ? `${granularCount} meal ${granularCount === 1 ? "coupon" : "coupons"}`
@@ -821,24 +839,78 @@ export default function App() {
       <SafeAreaView style={styles.safeArea}>
         <StatusBar style="light" />
         <ScrollView
-          contentContainerStyle={styles.welcomeScreen}
+          contentContainerStyle={[
+            styles.welcomeScreen,
+            isPhoneWidth && styles.phoneWelcomeScreen,
+          ]}
           showsVerticalScrollIndicator={false}
         >
           <View style={styles.sun} />
-          <View style={styles.homeLogoBadge}>
+          <View
+            style={[
+              styles.homeLogoBadge,
+              isPhoneWidth && styles.phoneHomeLogoBadge,
+            ]}
+          >
             <Image
-              source={require("./assets/udita-logo.jpeg")}
+              source={require("./assets/udita-logo-transparent.png")}
               resizeMode="contain"
-              style={styles.homeLogo}
+              style={[styles.homeLogo, isPhoneWidth && styles.phoneHomeLogo]}
             />
           </View>
-          <View style={styles.welcomeStack}>
+          <View
+            style={[
+              styles.welcomeStack,
+              isPhoneWidth && styles.phoneWelcomeStack,
+            ]}
+          >
             <View style={styles.welcomeContent}>
-              <Text style={styles.kicker}>UDITA UTSAB COMMUNITY CELEBRATION</Text>
-              <Text style={styles.welcomeTitleAccent}>Joy in every meal.</Text>
-              <Text style={styles.welcomeBody}>
-                Reserve food coupons for Durga Pujo 2026, from Sashthi through
-                Dashami.
+              <View
+                style={[styles.homeHero, isPhoneWidth && styles.phoneHomeHero]}
+              >
+                <Text
+                  style={[
+                    styles.homeHeroTitle,
+                    isPhoneWidth && styles.phoneHomeHeroTitle,
+                    homeFontsLoaded && styles.avigeaFont,
+                  ]}
+                >
+                  Petpujor{"\n"}Bandobasto
+                </Text>
+                <View
+                  style={[
+                    styles.homeYearSeal,
+                    isPhoneWidth && styles.phoneHomeYearSeal,
+                  ]}
+                >
+                  <Text
+                    style={[
+                      styles.homeYearText,
+                      isPhoneWidth && styles.phoneHomeYearText,
+                      homeFontsLoaded && styles.baloodaExtraBoldFont,
+                    ]}
+                  >
+                    2026
+                  </Text>
+                  <Text
+                    style={[
+                      styles.homeYearText,
+                      isPhoneWidth && styles.phoneHomeYearText,
+                      homeFontsLoaded && styles.baloodaExtraBoldFont,
+                    ]}
+                  >
+                    2027
+                  </Text>
+                </View>
+              </View>
+              <Text
+                style={[
+                  styles.homeSubhero,
+                  isPhoneWidth && styles.phoneHomeSubhero,
+                  homeFontsLoaded && styles.baloodaFont,
+                ]}
+              >
+                Joy in every meal!
               </Text>
               <View style={styles.phoneCard}>
                 <View style={locationStyles.inputs}>
@@ -1037,7 +1109,13 @@ export default function App() {
                 October 2026.
               </Text>
             </View>
-            <View style={styles.welcomeActions}>
+            <View
+              style={[
+                styles.welcomeActions,
+                isPhoneWidth && styles.phoneWelcomeActions,
+                shouldStackHomeActions && styles.stackedWelcomeActions,
+              ]}
+            >
               <Pressable
                 disabled={
                   donationSelected
@@ -1053,6 +1131,7 @@ export default function App() {
                   styles.primaryButton,
                   styles.actionButton,
                   styles.primaryActionButton,
+                  shouldStackHomeActions && styles.stackedActionButton,
                   (donationSelected
                     ? !canContinueWithDonation
                     : !canCheckApartment || isCheckingEligibility) &&
@@ -1078,6 +1157,7 @@ export default function App() {
                 onPress={() => void loadManagedBookings()}
                 style={({ pressed }) => [
                   styles.secondaryActionButton,
+                  shouldStackHomeActions && styles.stackedActionButton,
                   !canManageBookings && styles.secondaryActionButtonDisabled,
                   pressed && canManageBookings && styles.pressed,
                 ]}
@@ -1091,6 +1171,7 @@ export default function App() {
                 onPress={() => void loadAdminSummary()}
                 style={({ pressed }) => [
                   styles.secondaryActionButton,
+                  shouldStackHomeActions && styles.stackedActionButton,
                   isLoadingAdminSummary && styles.secondaryActionButtonDisabled,
                   pressed && !isLoadingAdminSummary && styles.pressed,
                 ]}
@@ -1934,20 +2015,25 @@ export default function App() {
           <Text style={styles.introTitle}>Book for the whole family</Text>
           <Text
             style={styles.introBody}
-          >{`Book season passes, individual meals, or both. Each selection can include up to ${MAX_QUANTITY} people.`}</Text>
+          >{hasSeasonPass
+              ? `Book season passes, individual meals, or both. Each selection can include up to ${MAX_QUANTITY} people.`
+              : `Book individual meals for up to ${MAX_QUANTITY} people per selection.`
+            }</Text>
         </View>
-        <View style={styles.seasonCard}>
-          <Text style={styles.seasonTitle}>Season pass</Text>
-          <Text style={styles.seasonSubtitle}>{seasonPassSubtitle}</Text>
-          <Text style={styles.seasonPrice}>
-            {currency(currentSeasonPassPrice)} per person
-          </Text>
-          <QuantityControl
-            quantity={seasonPasses}
-            onChange={changeSeasonPasses}
-            disabled={false}
-          />
-        </View>
+        {hasSeasonPass ? (
+          <View style={styles.seasonCard}>
+            <Text style={styles.seasonTitle}>Season pass</Text>
+            <Text style={styles.seasonSubtitle}>{seasonPassSubtitle}</Text>
+            <Text style={styles.seasonPrice}>
+              {currency(currentSeasonPassPrice)} per person
+            </Text>
+            <QuantityControl
+              quantity={seasonPasses}
+              onChange={changeSeasonPasses}
+              disabled={false}
+            />
+          </View>
+        ) : null}
         <View style={styles.sectionHeading}>
           <Text style={styles.sectionTitle}>Individual meals</Text>
           <Text style={styles.sectionCaption}>
@@ -1966,7 +2052,7 @@ export default function App() {
           </Text>
         ) : null}
         {days.map((day) => (
-          <View key={day.name} style={styles.dayCard}>
+          <View key={`${day.date}-${day.name}`} style={styles.dayCard}>
             <View style={styles.dayHeading}>
               <Text style={styles.dayDate}>{day.date}</Text>
               <Text style={styles.dayName}>{day.name}</Text>
@@ -2043,7 +2129,7 @@ export default function App() {
         </View>
         <Pressable
           disabled={
-            (seasonPasses === 0 && granularCount === 0) ||
+            (activeSeasonPasses === 0 && granularCount === 0) ||
             isMenuLoading ||
             !!menuError
           }
@@ -2053,12 +2139,12 @@ export default function App() {
           }}
           style={({ pressed }) => [
             styles.paymentNext,
-            ((seasonPasses === 0 && granularCount === 0) ||
+            ((activeSeasonPasses === 0 && granularCount === 0) ||
               isMenuLoading ||
               !!menuError) &&
               styles.paymentNextDisabled,
             pressed &&
-              (seasonPasses > 0 || granularCount > 0) &&
+              (activeSeasonPasses > 0 || granularCount > 0) &&
               !isMenuLoading &&
               !menuError &&
               styles.pressed,
@@ -2212,34 +2298,120 @@ const styles = StyleSheet.create({
     right: -115,
     opacity: 0.98,
   },
-  welcomeStack: { maxWidth: 620, width: "100%" },
-  welcomeContent: { maxWidth: 620 },
+  welcomeStack: { maxWidth: 700, width: "100%" },
+  welcomeContent: { maxWidth: 700 },
   homeLogoBadge: {
     alignItems: "center",
-    backgroundColor: "#FFF8EC",
-    borderColor: "rgba(244, 192, 91, 0.78)",
-    borderRadius: 14,
-    borderWidth: 1,
-    height: 86,
+    height: 100,
     justifyContent: "center",
     overflow: "hidden",
-    paddingHorizontal: 12,
     position: "absolute",
     right: 60,
     top: 46,
-    width: 148,
+    width: 170,
     zIndex: 2,
   },
   homeLogo: {
-    height: 74,
-    width: 124,
+    height: 96,
+    width: 162,
+  },
+  phoneHomeLogoBadge: {
+    right: 46,
+    top: 52,
+  },
+  phoneHomeLogo: {
+    height: 86,
+    width: 146,
   },
   kicker: {
     color: "#F7DFA7",
     fontSize: 12,
     letterSpacing: 2,
     fontWeight: "800",
-    marginBottom: 24,
+    marginBottom: 18,
+  },
+  avigeaFont: {
+    fontFamily: "Avigea",
+  },
+  baloodaFont: {
+    fontFamily: "Balooda2Medium",
+  },
+  baloodaExtraBoldFont: {
+    fontFamily: "Balooda2ExtraBold",
+  },
+  homeHero: {
+    alignSelf: "flex-start",
+    paddingRight: 96,
+    position: "relative",
+  },
+  phoneWelcomeScreen: {
+    paddingHorizontal: 34,
+    justifyContent: "flex-start",
+    paddingTop: 250,
+  },
+  phoneWelcomeStack: {
+    marginTop: 0,
+  },
+  phoneHomeHero: {
+    paddingRight: 104,
+  },
+  homeHeroTitle: {
+    color: "#FFF7E9",
+    fontFamily: displayFont,
+    fontSize: 68,
+    fontWeight: "900",
+    letterSpacing: -1.5,
+    lineHeight: 61,
+    position: "relative",
+    zIndex: 1,
+  },
+  phoneHomeHeroTitle: {
+    fontSize: 58,
+    lineHeight: 52,
+  },
+  homeYearSeal: {
+    alignItems: "center",
+    backgroundColor: "#EA2D22",
+    borderRadius: 75,
+    height: 150,
+    justifyContent: "center",
+    position: "absolute",
+    right: 48,
+    top: -42,
+    width: 150,
+    zIndex: 0,
+  },
+  phoneHomeYearSeal: {
+    borderRadius: 67,
+    height: 134,
+    right: 44,
+    top: -34,
+    width: 134,
+  },
+  homeYearText: {
+    color: "#FFE048",
+    fontFamily: displayFont,
+    fontSize: 32,
+    fontWeight: "900",
+    letterSpacing: -0.5,
+    lineHeight: 32,
+  },
+  phoneHomeYearText: {
+    fontSize: 28,
+    lineHeight: 29,
+  },
+  homeSubhero: {
+    color: "#F7DFA7",
+    fontFamily: displayFont,
+    fontSize: 30,
+    fontWeight: "700",
+    lineHeight: 38,
+    marginTop: 13,
+  },
+  phoneHomeSubhero: {
+    fontSize: 28,
+    lineHeight: 34,
+    marginTop: 16,
   },
   welcomeTitle: {
     color: "#FFF7E9",
@@ -2258,7 +2430,7 @@ const styles = StyleSheet.create({
     color: "#F9E8C8",
     fontSize: 18,
     lineHeight: 27,
-    marginTop: 30,
+    marginTop: 26,
     maxWidth: 470,
   },
   phoneCard: {
@@ -2321,6 +2493,13 @@ const styles = StyleSheet.create({
     gap: 10,
     marginTop: 28,
     width: "100%",
+  },
+  phoneWelcomeActions: {
+    gap: 12,
+  },
+  stackedWelcomeActions: {
+    alignItems: "stretch",
+    flexDirection: "column",
   },
   creatorFooter: {
     alignItems: "center",
@@ -2393,6 +2572,10 @@ const styles = StyleSheet.create({
   },
   actionButton: { marginBottom: 0, marginTop: 0 },
   primaryActionButton: { alignSelf: "stretch", flex: 1.35, justifyContent: "center" },
+  stackedActionButton: {
+    flex: undefined,
+    width: "100%",
+  },
   primaryButtonDisabled: { backgroundColor: "#CBAF72" },
   primaryButtonText: { color: "#541715", fontSize: 16, fontWeight: "800" },
   secondaryActionButton: {
