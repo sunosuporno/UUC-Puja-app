@@ -2369,7 +2369,7 @@ const styles = StyleSheet.create({
     height: 150,
     justifyContent: "center",
     position: "absolute",
-    right: 48,
+    right: 72,
     top: -42,
     width: 150,
     zIndex: 0,
@@ -2377,7 +2377,7 @@ const styles = StyleSheet.create({
   phoneHomeYearSeal: {
     borderRadius: 67,
     height: 134,
-    right: 44,
+    right: 68,
     top: -34,
     width: 134,
   },
