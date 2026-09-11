@@ -24,13 +24,17 @@
 
    The app treats this as configuration only. It will not show as an individual meal card, and the pass will still be saved as one row per included day in `Booking Items`. Leave `Menu Veg` blank to use the default included days: `Saptami 1`, `Saptami 2`, `Ashtami`, and `Nabami`. After the updated Apps Script is deployed, you can optionally put a comma-separated included-day list in `Menu Veg`.
 
+   Dated events remain available through their event date and are removed from the booking page starting the following day. A season pass is also removed once one of its included dated events has passed.
+
    When a resident upgrades dine-in items to takeaway, the matching `Booking Items` rows are updated to `Takeaway` with the new unit price and line total. The matching `Bookings` row is also updated with the new payable amount, regenerated booking details, and an appended upgrade payment note.
 
-4. Open `Extensions` > `Apps Script` from that Sheet.
-5. Replace the default `Code.gs` content with `Code.gs` from this folder and save.
-6. In Apps Script settings, enable `Show "appsscript.json" manifest file in editor`, then replace the manifest content with `appsscript.json` from this folder and save.
-7. Deploy it as a Web app. Choose `Execute as: Me`, set access to `Anyone`, and grant the app access to run the web app.
-8. Copy the deployed `/exec` URL. That is the URL the Expo app will use to create bookings and manage takeaway upgrades.
+4. Keep the Pujo donation records in a tab named `Donations` in this same spreadsheet. The script discovers the header row using the existing tower and apartment headers. New donation records also store the payment date in `Date` and the resident's validated WhatsApp number in `Ph #`.
+
+5. Open `Extensions` > `Apps Script` from that Sheet.
+6. Replace the default `Code.gs` content with `Code.gs` from this folder and save.
+7. In Apps Script settings, enable `Show "appsscript.json" manifest file in editor`, then replace the manifest content with `appsscript.json` from this folder and save.
+8. Deploy it as a Web app. Choose `Execute as: Me`, set access to `Anyone`, and grant the app access to run the web app.
+9. Copy the deployed `/exec` URL. That is the URL the Expo app will use to create bookings and manage takeaway upgrades.
 
 The Sheet does not need to be shared publicly or made editable. The script is bound to the Sheet and runs with the deployer's permissions.
 

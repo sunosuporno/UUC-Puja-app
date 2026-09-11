@@ -1,6 +1,6 @@
 import { StatusBar } from "expo-status-bar";
 import { useFonts } from "expo-font";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Picker } from "@react-native-picker/picker";
 import QRCode from "react-native-qrcode-svg";
 import {
@@ -149,6 +149,18 @@ type AdminSummaryResponse = {
   summary?: AdminSummary;
   error?: string;
 };
+type AdminDashboardView = 1 | 2;
+type DashboardMatrixColumn = {
+  key: string;
+  mealType: string;
+  foodType: "Veg" | "Non-Veg";
+};
+type DashboardMatrixRow = {
+  key: string;
+  eventName: string;
+  serviceType: ServiceType;
+  values: Record<string, { quantity: number; amount: number }>;
+};
 
 const MAX_QUANTITY = 15;
 const DONATION_AMOUNT = 4000;
@@ -161,7 +173,7 @@ const DEFAULT_SEASON_PASS_CONFIG: SeasonPassConfig = {
   includedDays: ["Saptami 1", "Saptami 2", "Ashtami", "Nabami"],
   description: "",
 };
-const TEST_UPI_ID = "sarkarsuporno36@okhdfcbank";
+const UPI_ID = "boim-405733112614@boi";
 const UPI_PAYEE_NAME = "UUC Pujo Coupons";
 const BOOKINGS_API_URL = process.env.EXPO_PUBLIC_BOOKINGS_API_URL;
 const CREATOR_NAME = "Suporno";
@@ -169,6 +181,10 @@ const CREATOR_EMAIL = "sarkarsuporno36@gmail.com";
 const CREATOR_PHONE = "+91 62894 91245";
 
 const currency = (amount: number) => `Rs. ${amount.toLocaleString("en-IN")}`;
+const createClientRequestId = (prefix: "booking" | "upgrade") =>
+  `${prefix}-${Date.now().toString(36)}-${Math.random()
+    .toString(36)
+    .slice(2, 12)}`;
 const phoneDigits = (value: string) => value.replace(/\D/g, "");
 const normalizeWhatsAppInput = (value: string) => {
   let digits = phoneDigits(value);
@@ -223,51 +239,162 @@ const displayDayDate = (value: string) => {
   return `${Number(match[3])} ${month}`;
 };
 
+const buildDashboardOneData = (menuDays: Day[], summary: AdminSummary) => {
+  const eventNames: string[] = [];
+  const seenEvents = new Set<string>();
+  [...menuDays.map((day) => day.name), ...summary.days.map((day) => day.dayName)]
+    .filter(Boolean)
+    .forEach((eventName) => {
+      if (seenEvents.has(eventName)) return;
+      seenEvents.add(eventName);
+      eventNames.push(eventName);
+    });
+
+  const mealTypes = ["Breakfast", "Lunch", "Dinner"];
+  summary.days.forEach((day) => {
+    day.meals.forEach((meal) => {
+      if (meal.mealType && !mealTypes.includes(meal.mealType)) {
+        mealTypes.push(meal.mealType);
+      }
+    });
+  });
+
+  const columns: DashboardMatrixColumn[] = mealTypes.flatMap((mealType) =>
+    (["Veg", "Non-Veg"] as const).map((foodType) => ({
+      key: `${mealType}-${foodType}`,
+      mealType,
+      foodType,
+    }))
+  );
+  const rows: DashboardMatrixRow[] = eventNames.flatMap((eventName) =>
+    (["Dine-In", "Takeaway"] as const).map((serviceType) => {
+      const day = summary.days.find((candidate) => candidate.dayName === eventName);
+      const values: DashboardMatrixRow["values"] = {};
+      columns.forEach((column) => {
+        const matches = day?.meals.filter(
+          (meal) =>
+            meal.mealType === column.mealType &&
+            meal.foodType === column.foodType &&
+            meal.serviceType === serviceType
+        );
+        values[column.key] = {
+          quantity: (matches || []).reduce((sum, meal) => sum + meal.quantity, 0),
+          amount: (matches || []).reduce(
+            (sum, meal) => sum + meal.amountCollected,
+            0
+          ),
+        };
+      });
+      return {
+        key: `${eventName}-${serviceType}`,
+        eventName,
+        serviceType,
+        values,
+      };
+    })
+  );
+
+  return { columns, rows };
+};
+
+const isPastEventDate = (value: string, today = new Date()) => {
+  const match = value.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) return false;
+
+  const year = Number(match[1]);
+  const monthIndex = Number(match[2]) - 1;
+  const day = Number(match[3]);
+  const eventDate = new Date(year, monthIndex, day);
+  if (
+    eventDate.getFullYear() !== year ||
+    eventDate.getMonth() !== monthIndex ||
+    eventDate.getDate() !== day
+  ) {
+    return false;
+  }
+
+  const currentDate = new Date(
+    today.getFullYear(),
+    today.getMonth(),
+    today.getDate()
+  );
+  return eventDate.getTime() < currentDate.getTime();
+};
+
 async function callBookingsApi<T>(payload: Record<string, unknown>): Promise<T> {
   if (!BOOKINGS_API_URL) {
     throw new Error("Booking service is not configured yet. Please try again later.");
   }
 
-  const params = new URLSearchParams({
-    payload: JSON.stringify(payload),
-    _: String(Date.now()),
-  });
-  const separator = BOOKINGS_API_URL.includes("?") ? "&" : "?";
-  const requestUrl = `${BOOKINGS_API_URL}${separator}${params.toString()}`;
-  const response = await fetch(requestUrl, {
-    redirect: "follow",
-    cache: "no-store",
-    headers: {
-      Accept: "application/json",
-    },
-  });
-  const text = await response.text();
-  const trimmedText = text.trim();
+  const action = typeof payload.action === "string" ? payload.action : "";
+  const isReadRequest = [
+    "checkDonation",
+    "getFoodMenu",
+    "getBookingsForApartment",
+    "getAdminSummary",
+  ].includes(action);
+  const maxAttempts = isReadRequest ? 2 : 1;
 
-  try {
-    const result = JSON.parse(trimmedText) as T;
-    if (!response.ok) {
-      const message =
-        typeof result === "object" &&
-        result !== null &&
-        "error" in result &&
-        typeof result.error === "string"
-          ? result.error
-          : "Booking service returned an error.";
-      throw new Error(message);
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    const requestOptions: RequestInit = isReadRequest
+      ? {
+          redirect: "follow",
+          cache: "no-store",
+          headers: { Accept: "application/json" },
+        }
+      : {
+          method: "POST",
+          redirect: "follow",
+          cache: "no-store",
+          headers: {
+            Accept: "application/json",
+            "Content-Type": "text/plain;charset=utf-8",
+          },
+          body: JSON.stringify(payload),
+        };
+    const requestUrl = isReadRequest
+      ? `${BOOKINGS_API_URL}${
+          BOOKINGS_API_URL.includes("?") ? "&" : "?"
+        }${new URLSearchParams({
+          payload: JSON.stringify(payload),
+          _: `${Date.now()}-${attempt}-${Math.random().toString(36).slice(2)}`,
+        }).toString()}`
+      : BOOKINGS_API_URL;
+
+    let response: Response;
+    try {
+      response = await fetch(requestUrl, requestOptions);
+    } catch (error) {
+      if (isReadRequest && attempt + 1 < maxAttempts) continue;
+      throw error;
     }
-    return result;
-  } catch (error) {
-    if (error instanceof SyntaxError) {
-      const snippet = trimmedText
-        .replace(/\s+/g, " ")
-        .slice(0, 120);
+
+    const trimmedText = (await response.text()).trim();
+    try {
+      const result = JSON.parse(trimmedText) as T;
+      if (!response.ok) {
+        const message =
+          typeof result === "object" &&
+          result !== null &&
+          "error" in result &&
+          typeof result.error === "string"
+            ? result.error
+            : "Booking service returned an error.";
+        throw new Error(message);
+      }
+      return result;
+    } catch (error) {
+      if (!(error instanceof SyntaxError)) throw error;
+      if (isReadRequest && attempt + 1 < maxAttempts) continue;
       throw new Error(
-        `Booking service returned HTML instead of data. Status: ${response.status}. URL: ${response.url}. First text: ${snippet}`
+        isReadRequest
+          ? "The booking service was temporarily unavailable. Please try again."
+          : "The booking may have been received, but confirmation could not be loaded. Check Manage Bookings before trying again."
       );
     }
-    throw error;
   }
+
+  throw new Error("The booking service was temporarily unavailable. Please try again.");
 }
 
 function normalizeSeasonPassConfig(
@@ -295,10 +422,12 @@ function QuantityControl({
   quantity,
   onChange,
   disabled,
+  maxQuantity = MAX_QUANTITY,
 }: {
   quantity: number;
   onChange: (next: number) => void;
   disabled: boolean;
+  maxQuantity?: number;
 }) {
   return (
     <View
@@ -320,16 +449,87 @@ function QuantityControl({
       </Pressable>
       <Text style={styles.quantityText}>{quantity}</Text>
       <Pressable
-        disabled={disabled || quantity === MAX_QUANTITY}
+        disabled={disabled || quantity >= maxQuantity}
         onPress={() => onChange(quantity + 1)}
         style={({ pressed }) => [
           styles.quantityButton,
-          (disabled || quantity === MAX_QUANTITY) && styles.inactiveButton,
+          (disabled || quantity >= maxQuantity) && styles.inactiveButton,
           pressed && styles.pressed,
         ]}
       >
         <Text style={styles.quantitySymbol}>+</Text>
       </Pressable>
+    </View>
+  );
+}
+
+function HeaderLogo() {
+  return (
+    <Image
+      accessibilityLabel="Udita Utsav Committee"
+      resizeMode="contain"
+      source={require("./assets/udita-logo-transparent.png")}
+      style={styles.headerLogo}
+    />
+  );
+}
+
+function DashboardMatrix({
+  title,
+  columns,
+  rows,
+  valueType,
+}: {
+  title: string;
+  columns: DashboardMatrixColumn[];
+  rows: DashboardMatrixRow[];
+  valueType: "quantity" | "amount";
+}) {
+  return (
+    <View style={styles.dashboardMatrixCard}>
+      <Text style={styles.dashboardMatrixTitle}>{title}</Text>
+      <ScrollView horizontal showsHorizontalScrollIndicator>
+        <View>
+          <View style={[styles.dashboardMatrixRow, styles.dashboardMatrixHeader]}>
+            <Text style={[styles.dashboardMatrixHeaderText, styles.dashboardEventCell]}>
+              Event
+            </Text>
+            <Text style={[styles.dashboardMatrixHeaderText, styles.dashboardServiceCell]}>
+              Service
+            </Text>
+            {columns.map((column) => (
+              <View key={column.key} style={styles.dashboardValueCell}>
+                <Text style={styles.dashboardMatrixHeaderText}>{column.mealType}</Text>
+                <Text style={styles.dashboardMatrixSubheader}>{column.foodType}</Text>
+              </View>
+            ))}
+          </View>
+          {rows.map((row, index) => (
+            <View
+              key={row.key}
+              style={[
+                styles.dashboardMatrixRow,
+                index % 2 === 1 && styles.dashboardMatrixAlternateRow,
+              ]}
+            >
+              <Text style={[styles.dashboardMatrixEvent, styles.dashboardEventCell]}>
+                {row.eventName}
+              </Text>
+              <Text style={[styles.dashboardMatrixService, styles.dashboardServiceCell]}>
+                {row.serviceType}
+              </Text>
+              {columns.map((column) => {
+                const value = row.values[column.key]?.[valueType] || 0;
+                return (
+                  <Text key={column.key} style={[styles.dashboardMatrixValue, styles.dashboardValueCell]}>
+                    {valueType === "amount" ? currency(value) : value}
+                  </Text>
+                );
+              })}
+            </View>
+          ))}
+        </View>
+      </ScrollView>
     </View>
   );
 }
@@ -343,6 +543,9 @@ export default function App() {
   const { width } = useWindowDimensions();
   const isPhoneWidth = width < 720;
   const shouldStackHomeActions = width < 360;
+  const submissionInFlightRef = useRef(false);
+  const bookingRequestIdRef = useRef("");
+  const upgradeRequestIdRef = useRef("");
   const [screen, setScreen] = useState<Screen>("phone");
   const [towerNumber, setTowerNumber] = useState("");
   const [apartmentNumber, setApartmentNumber] = useState("");
@@ -360,11 +563,13 @@ export default function App() {
   const [isLoadingManagedBookings, setIsLoadingManagedBookings] =
     useState(false);
   const [managedBookings, setManagedBookings] = useState<ManagedBooking[]>([]);
-  const [upgradeSelections, setUpgradeSelections] = useState<
-    Record<string, boolean>
+  const [upgradeQuantities, setUpgradeQuantities] = useState<
+    Record<string, number>
   >({});
   const [upgradeReference, setUpgradeReference] = useState("");
   const [adminSummary, setAdminSummary] = useState<AdminSummary | null>(null);
+  const [activeAdminDashboard, setActiveAdminDashboard] =
+    useState<AdminDashboardView>(1);
   const [adminError, setAdminError] = useState("");
   const [isLoadingAdminSummary, setIsLoadingAdminSummary] = useState(false);
   const [days, setDays] = useState<Day[]>([]);
@@ -416,7 +621,7 @@ export default function App() {
         }
 
         if (active) {
-          setDays(result.menu.days);
+          setDays(result.menu.days.filter((day) => !isPastEventDate(day.date)));
           const normalizedSeasonPass = normalizeSeasonPassConfig(
             result.menu.seasonPass
           );
@@ -555,12 +760,14 @@ export default function App() {
   ];
   const managedItems = managedBookings.flatMap((booking) => booking.items);
   const selectedUpgradeItems: ReviewItem[] = managedItems
-    .filter((item) => item.upgradeable && upgradeSelections[item.id])
+    .filter(
+      (item) => item.upgradeable && (upgradeQuantities[item.id] ?? 0) > 0
+    )
     .map((item) => ({
       id: item.id,
       label: `${item.bookingReference}: ${item.dayName} ${item.mealType} (${item.foodType}) to Takeaway`,
-      quantity: item.quantity,
-      subtotal: item.extraTotal,
+      quantity: upgradeQuantities[item.id] ?? 0,
+      subtotal: item.extraUnitPrice * (upgradeQuantities[item.id] ?? 0),
     }));
   const upgradeTotal = selectedUpgradeItems.reduce(
     (sum, item) => sum + item.subtotal,
@@ -621,7 +828,7 @@ export default function App() {
       .filter((detail): detail is string => detail !== null)
       .join(", ") || "No coupons selected";
   const upiPaymentUri = `upi://pay?pa=${encodeURIComponent(
-    TEST_UPI_ID
+    UPI_ID
   )}&pn=${encodeURIComponent(UPI_PAYEE_NAME)}&am=${paymentTotal.toFixed(
     2
   )}&cu=INR&tn=${encodeURIComponent(
@@ -668,7 +875,7 @@ export default function App() {
     setEligibilityError("");
     setManageError("");
     setManagedBookings([]);
-    setUpgradeSelections({});
+    setUpgradeQuantities({});
     setIsLoadingManagedBookings(true);
 
     try {
@@ -730,14 +937,28 @@ export default function App() {
     }
   };
 
-  const toggleUpgradeSelection = (itemId: string) => {
-    setUpgradeSelections((current) => ({
-      ...current,
-      [itemId]: !current[itemId],
-    }));
+  const changeUpgradeQuantity = (
+    itemId: string,
+    nextQuantity: number,
+    availableQuantity: number
+  ) => {
+    const safeQuantity = Math.max(
+      0,
+      Math.min(Math.floor(nextQuantity), availableQuantity)
+    );
+    setUpgradeQuantities((current) => {
+      if (safeQuantity === 0) {
+        const updated = { ...current };
+        delete updated[itemId];
+        return updated;
+      }
+
+      return { ...current, [itemId]: safeQuantity };
+    });
   };
 
   const completeBooking = async (method: PaymentMethod) => {
+    if (submissionInFlightRef.current) return;
     if (!TOWER_OPTIONS.includes(towerNumber)) {
       setBookingSubmissionError("Choose a valid tower.");
       return;
@@ -763,7 +984,11 @@ export default function App() {
     }
 
     setBookingSubmissionError("");
+    submissionInFlightRef.current = true;
     setIsSubmitting(true);
+    if (!bookingRequestIdRef.current) {
+      bookingRequestIdRef.current = createClientRequestId("booking");
+    }
 
     try {
       const result = await callBookingsApi<{
@@ -771,6 +996,7 @@ export default function App() {
         booking?: { bookingReference?: string };
         error?: string;
       }>({
+        bookingRequestId: bookingRequestIdRef.current,
         towerNumber,
         apartmentNumber,
         whatsAppNumber,
@@ -801,19 +1027,24 @@ export default function App() {
         error instanceof Error ? error.message : "Unable to save booking."
       );
     } finally {
+      submissionInFlightRef.current = false;
       setIsSubmitting(false);
     }
   };
 
   const completeUpgrade = async (method: PaymentMethod) => {
-    const selectedItemIds = selectedUpgradeItems.map((item) => item.id);
+    if (submissionInFlightRef.current) return;
+    const itemUpgrades = selectedUpgradeItems.map((item) => ({
+      itemId: item.id,
+      quantity: item.quantity,
+    }));
     if (!BOOKINGS_API_URL) {
       setBookingSubmissionError(
         "Booking service is not configured yet. Please try again later."
       );
       return;
     }
-    if (selectedItemIds.length === 0 || upgradeTotal <= 0) {
+    if (itemUpgrades.length === 0 || upgradeTotal <= 0) {
       setBookingSubmissionError(
         "Select at least one dine-in item to switch to takeaway."
       );
@@ -821,7 +1052,11 @@ export default function App() {
     }
 
     setBookingSubmissionError("");
+    submissionInFlightRef.current = true;
     setIsSubmitting(true);
+    if (!upgradeRequestIdRef.current) {
+      upgradeRequestIdRef.current = createClientRequestId("upgrade");
+    }
 
     try {
       const result = await callBookingsApi<{
@@ -832,7 +1067,8 @@ export default function App() {
         action: "upgradeToTakeaway",
         towerNumber,
         apartmentNumber,
-        itemIds: selectedItemIds,
+        itemUpgrades,
+        upgradeRequestId: upgradeRequestIdRef.current,
         paymentMethod: method,
         payableAmount: upgradeTotal,
         paymentReference:
@@ -858,6 +1094,7 @@ export default function App() {
           : "Unable to save takeaway upgrade."
       );
     } finally {
+      submissionInFlightRef.current = false;
       setIsSubmitting(false);
     }
   };
@@ -880,7 +1117,9 @@ export default function App() {
     setManageError("");
     setIsLoadingManagedBookings(false);
     setManagedBookings([]);
-    setUpgradeSelections({});
+    setUpgradeQuantities({});
+    bookingRequestIdRef.current = "";
+    upgradeRequestIdRef.current = "";
     setUpgradeReference("");
     setAdminSummary(null);
     setAdminError("");
@@ -1342,7 +1581,10 @@ export default function App() {
               </Pressable>
               <Pressable
                 disabled={isLoadingAdminSummary}
-                onPress={() => void loadAdminSummary()}
+                onPress={() => {
+                  setActiveAdminDashboard(1);
+                  void loadAdminSummary();
+                }}
                 style={({ pressed }) => [
                   styles.secondaryActionButton,
                   shouldStackHomeActions && styles.stackedActionButton,
@@ -1351,7 +1593,7 @@ export default function App() {
                 ]}
               >
                 <Text style={styles.secondaryActionButtonText}>
-                  {isLoadingAdminSummary ? "Loading..." : "Admin summary"}
+                  {isLoadingAdminSummary ? "Loading..." : "Dashboards"}
                 </Text>
               </Pressable>
             </View>
@@ -1409,6 +1651,9 @@ export default function App() {
           { label: "Individual", value: totals.individual },
         ]
       : [];
+    const dashboardOneData = adminSummary
+      ? buildDashboardOneData(days, adminSummary)
+      : { columns: [], rows: [] };
 
     return (
       <SafeAreaView style={styles.safeArea}>
@@ -1419,21 +1664,47 @@ export default function App() {
           </Pressable>
           <View>
             <Text style={styles.headerKicker}>ADMIN</Text>
-            <Text style={styles.headerTitle}>Coupon summary</Text>
+            <Text style={styles.headerTitle}>Dashboards</Text>
           </View>
-          <View style={styles.headerLotus}>
-            <Text style={styles.lotusText}>✦</Text>
-          </View>
+          <HeaderLogo />
         </View>
         <ScrollView
           contentContainerStyle={styles.bookingContent}
           showsVerticalScrollIndicator={false}
         >
+          <View style={styles.adminDashboardTabs}>
+            {([1, 2] as const).map((dashboardNumber) => {
+              const selected = activeAdminDashboard === dashboardNumber;
+              return (
+                <Pressable
+                  key={dashboardNumber}
+                  onPress={() => setActiveAdminDashboard(dashboardNumber)}
+                  style={({ pressed }) => [
+                    styles.adminDashboardTab,
+                    selected && styles.adminDashboardTabSelected,
+                    pressed && styles.pressed,
+                  ]}
+                >
+                  <Text
+                    style={[
+                      styles.adminDashboardTabText,
+                      selected && styles.adminDashboardTabTextSelected,
+                    ]}
+                  >
+                    Dashboard {dashboardNumber}
+                  </Text>
+                </Pressable>
+              );
+            })}
+          </View>
           <View style={styles.introBlock}>
-            <Text style={styles.introTitle}>Quick pulse check</Text>
+            <Text style={styles.introTitle}>
+              Dashboard {activeAdminDashboard}
+            </Text>
             <Text style={styles.introBody}>
-              Counts and totals come only from the `Booking Items` tab, so
-              donation data is intentionally excluded.
+              {activeAdminDashboard === 1
+                ? "Quantity and amount matrix by event, service, meal, and food type."
+                : "Detailed coupon totals and day-wise meal breakdown."}
             </Text>
             {updatedAt ? (
               <Text style={styles.adminTimestamp}>Updated {updatedAt}</Text>
@@ -1447,7 +1718,23 @@ export default function App() {
               No admin summary is loaded yet.
             </Text>
           ) : null}
-          {adminSummary ? (
+          {adminSummary && activeAdminDashboard === 1 ? (
+            <>
+              <DashboardMatrix
+                title="Quantity"
+                columns={dashboardOneData.columns}
+                rows={dashboardOneData.rows}
+                valueType="quantity"
+              />
+              <DashboardMatrix
+                title="Amount"
+                columns={dashboardOneData.columns}
+                rows={dashboardOneData.rows}
+                valueType="amount"
+              />
+            </>
+          ) : null}
+          {adminSummary && activeAdminDashboard === 2 ? (
             <>
               <View style={styles.adminMetricGrid}>
                 {totalCards.map((card) => (
@@ -1568,7 +1855,10 @@ export default function App() {
   }
 
   if (screen === "manage") {
-    const selectedUpgradeCount = selectedUpgradeItems.length;
+    const selectedUpgradeCount = selectedUpgradeItems.reduce(
+      (sum, item) => sum + item.quantity,
+      0
+    );
     const upgradeableCount = managedItems.filter(
       (item) => item.upgradeable
     ).length;
@@ -1586,9 +1876,7 @@ export default function App() {
               {towerNumber}/{apartmentNumber}
             </Text>
           </View>
-          <View style={styles.headerLotus}>
-            <Text style={styles.lotusText}>✦</Text>
-          </View>
+          <HeaderLogo />
         </View>
         <ScrollView
           contentContainerStyle={styles.bookingContent}
@@ -1599,8 +1887,9 @@ export default function App() {
               Switch dine-in meals to takeaway
             </Text>
             <Text style={styles.introBody}>
-              Only existing individual dine-in items can be upgraded. Takeaway
-              meals, season passes, and quantities cannot be changed here.
+              For each eligible dine-in meal, choose how many coupons to switch
+              to takeaway. Existing takeaway meals and season passes cannot be
+              changed here.
             </Text>
           </View>
           {managedBookings.map((booking) => (
@@ -1625,10 +1914,15 @@ export default function App() {
                 </Text>
               ) : null}
               {booking.items.map((item) => {
-                const selected = !!upgradeSelections[item.id];
+                const selectedQuantity = upgradeQuantities[item.id] ?? 0;
+                const selected = selectedQuantity > 0;
                 const isDineIn = item.serviceType === "Dine-In";
                 const statusText = item.upgradeable
-                  ? `Upgrade for ${currency(item.extraTotal)}`
+                  ? selected
+                    ? `${selectedQuantity} of ${item.quantity} selected · ${currency(
+                        item.extraUnitPrice * selectedQuantity
+                      )} extra`
+                    : `${currency(item.extraUnitPrice)} extra per coupon`
                   : item.serviceType === "Takeaway"
                   ? "Already takeaway"
                   : item.source === "Season Pass"
@@ -1638,15 +1932,12 @@ export default function App() {
                   : "Not eligible";
 
                 return (
-                  <Pressable
+                  <View
                     key={item.id}
-                    disabled={!item.upgradeable}
-                    onPress={() => toggleUpgradeSelection(item.id)}
-                    style={({ pressed }) => [
+                    style={[
                       styles.manageItem,
                       selected && styles.manageItemSelected,
                       !item.upgradeable && styles.manageItemDisabled,
-                      pressed && item.upgradeable && styles.pressed,
                     ]}
                   >
                     <View style={styles.manageItemMain}>
@@ -1677,18 +1968,21 @@ export default function App() {
                       <Text style={styles.manageItemStatus}>{statusText}</Text>
                     </View>
                     {item.upgradeable ? (
-                      <View
-                        style={[
-                          styles.manageCheckbox,
-                          selected && styles.manageCheckboxSelected,
-                        ]}
-                      >
-                        {selected ? (
-                          <Text style={styles.manageCheckmark}>✓</Text>
-                        ) : null}
+                      <View style={styles.manageUpgradeControl}>
+                        <Text style={styles.manageUpgradeLabel}>
+                          Change to takeaway
+                        </Text>
+                        <QuantityControl
+                          quantity={selectedQuantity}
+                          onChange={(next) =>
+                            changeUpgradeQuantity(item.id, next, item.quantity)
+                          }
+                          disabled={false}
+                          maxQuantity={item.quantity}
+                        />
                       </View>
                     ) : null}
-                  </Pressable>
+                  </View>
                 );
               })}
             </View>
@@ -1704,8 +1998,8 @@ export default function App() {
           <View>
             <Text style={styles.summaryLabel}>
               {selectedUpgradeCount > 0
-                ? `${selectedUpgradeCount} upgrade ${
-                    selectedUpgradeCount === 1 ? "item" : "items"
+                ? `${selectedUpgradeCount} ${
+                    selectedUpgradeCount === 1 ? "coupon" : "coupons"
                   } selected`
                 : "No upgrades selected"}
             </Text>
@@ -1714,6 +2008,7 @@ export default function App() {
           <Pressable
             disabled={upgradeTotal <= 0}
             onPress={() => {
+              upgradeRequestIdRef.current = createClientRequestId("upgrade");
               setPaymentPurpose("upgrade");
               setBookingSubmissionError("");
               setCashAmount("");
@@ -1757,9 +2052,7 @@ export default function App() {
             </Text>
             <Text style={styles.headerTitle}>Complete payment</Text>
           </View>
-          <View style={styles.headerLotus}>
-            <Text style={styles.lotusText}>✦</Text>
-          </View>
+          <HeaderLogo />
         </View>
         <ScrollView
           contentContainerStyle={styles.paymentContent}
@@ -1893,9 +2186,7 @@ export default function App() {
             <Text style={styles.headerKicker}>CASH PAYMENT</Text>
             <Text style={styles.headerTitle}>Cash received</Text>
           </View>
-          <View style={styles.headerLotus}>
-            <Text style={styles.lotusText}>✦</Text>
-          </View>
+          <HeaderLogo />
         </View>
         <View style={styles.singlePageContent}>
           <Text style={styles.paymentTitle}>{currency(paymentTotal)}</Text>
@@ -1972,9 +2263,7 @@ export default function App() {
             <Text style={styles.headerKicker}>CHEQUE PAYMENT</Text>
             <Text style={styles.headerTitle}>Cheque details</Text>
           </View>
-          <View style={styles.headerLotus}>
-            <Text style={styles.lotusText}>✦</Text>
-          </View>
+          <HeaderLogo />
         </View>
         <View style={styles.singlePageContent}>
           <Text style={styles.paymentTitle}>{currency(paymentTotal)}</Text>
@@ -2031,9 +2320,7 @@ export default function App() {
             <Text style={styles.headerKicker}>UPI PAYMENT</Text>
             <Text style={styles.headerTitle}>Scan to pay</Text>
           </View>
-          <View style={styles.headerLotus}>
-            <Text style={styles.lotusText}>✦</Text>
-          </View>
+          <HeaderLogo />
         </View>
         <ScrollView
           contentContainerStyle={styles.singlePageContent}
@@ -2055,7 +2342,7 @@ export default function App() {
               backgroundColor="#FFFDF8"
             />
             <Text style={styles.qrRecipient}>Paying to</Text>
-            <Text style={styles.qrUpiId}>{TEST_UPI_ID}</Text>
+            <Text style={styles.qrUpiId}>{UPI_ID}</Text>
           </View>
           {!upiPaymentReported ? (
             <Pressable
@@ -2121,6 +2408,14 @@ export default function App() {
         <StatusBar style="light" />
         <View style={[styles.successScreen, successLayoutStyles.screen]}>
           <View style={styles.successSun} />
+          <View style={styles.successLogoBadge}>
+            <Image
+              accessibilityLabel="Udita Utsav Committee"
+              resizeMode="contain"
+              source={require("./assets/udita-logo-transparent.png")}
+              style={styles.successLogo}
+            />
+          </View>
           <View style={successLayoutStyles.stack}>
             <View style={[styles.successContent, successLayoutStyles.content]}>
               <Text style={styles.successKicker}>UUC PUJO 2026</Text>
@@ -2177,9 +2472,7 @@ export default function App() {
           <Text style={styles.headerKicker}>STEP 2 OF 3</Text>
           <Text style={styles.headerTitle}>Choose your feast</Text>
         </View>
-        <View style={styles.headerLotus}>
-          <Text style={styles.lotusText}>✦</Text>
-        </View>
+        <HeaderLogo />
       </View>
       <ScrollView
         contentContainerStyle={styles.bookingContent}
@@ -2460,7 +2753,7 @@ const cashStyles = StyleSheet.create({
   shortfallText: { color: "#942F27", fontSize: 13, fontWeight: "800" },
 });
 const successLayoutStyles = StyleSheet.create({
-  screen: { justifyContent: "center" },
+  screen: { alignItems: "center", justifyContent: "center" },
   stack: { maxWidth: 620, width: "100%" },
   content: { marginTop: 0 },
 });
@@ -2815,15 +3108,10 @@ const styles = StyleSheet.create({
     marginTop: 2,
     textAlign: "center",
   },
-  headerLotus: {
-    alignItems: "center",
-    backgroundColor: "#7C1D19",
-    borderRadius: 20,
+  headerLogo: {
     height: 40,
-    justifyContent: "center",
-    width: 40,
+    width: 62,
   },
-  lotusText: { color: "#F5C75E", fontSize: 20 },
   bookingContent: {
     alignSelf: "center",
     maxWidth: 900,
@@ -3114,24 +3402,14 @@ const styles = StyleSheet.create({
     fontWeight: "900",
     marginTop: 6,
   },
-  manageCheckbox: {
+  manageUpgradeControl: {
     alignItems: "center",
-    borderColor: "#C89C56",
-    borderRadius: 6,
-    borderWidth: 2,
-    height: 28,
-    justifyContent: "center",
-    width: 28,
+    gap: 7,
   },
-  manageCheckboxSelected: {
-    backgroundColor: "#7C1D19",
-    borderColor: "#7C1D19",
-  },
-  manageCheckmark: {
-    color: "#FFF8EC",
-    fontSize: 17,
-    fontWeight: "900",
-    lineHeight: 20,
+  manageUpgradeLabel: {
+    color: "#6F5A4D",
+    fontSize: 11,
+    fontWeight: "800",
   },
   adminTimestamp: {
     color: "#A36A15",
@@ -3447,6 +3725,17 @@ const styles = StyleSheet.create({
     top: -170,
     width: 380,
   },
+  successLogoBadge: {
+    alignItems: "center",
+    height: 130,
+    justifyContent: "center",
+    position: "absolute",
+    right: 18,
+    top: 18,
+    width: 220,
+    zIndex: 2,
+  },
+  successLogo: { height: 124, width: 214 },
   successContent: { alignItems: "flex-start", marginTop: "18%", maxWidth: 520 },
   successKicker: {
     color: "#F7DFA7",

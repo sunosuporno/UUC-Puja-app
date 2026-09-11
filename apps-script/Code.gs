@@ -1,17 +1,20 @@
 const BOOKINGS_SHEET_NAME = 'Bookings';
 const BOOKING_ITEMS_SHEET_NAME = 'Booking Items';
 const FOOD_MENU_SHEET_NAME = 'Food Menu';
-const DONATIONS_SPREADSHEET_ID = '18496SQ_gLOH-XDOqomYS-pbO50WXcZwYaczf2WabyHo';
-const DONATIONS_SHEET_NAME = 'Sheet3';
+const DONATIONS_SHEET_NAME = 'Donations';
 const DONATION_TOWER_HEADERS = ['TWR', 'Tower', 'Tower No.', 'Tower No', 'Tower Number'];
 const DONATION_APARTMENT_HEADER = 'Apt. No.';
 const DONATION_RECEIPT_HEADERS = ['Receipt No.', 'Recipt No.'];
 const DONATION_NAME_HEADERS = ['Name'];
 const DONATION_AMOUNT_HEADERS = ['Amount'];
 const DONATION_TRANSACTION_HEADERS = ['Transaction ID', 'Transction ID'];
+const DONATION_DATE_HEADERS = ['Date'];
+const DONATION_PHONE_HEADERS = ['Ph #', 'Phone', 'Phone Number', 'WhatsApp Number'];
 const DONATION_AMOUNT = 4000;
 const APARTMENT_NUMBER_MAX_LENGTH = 20;
 const DONOR_NAME_MAX_LENGTH = 80;
+const BOOKING_REQUEST_PROPERTY_PREFIX = 'bookingRequest:';
+const UPGRADE_REQUEST_PROPERTY_PREFIX = 'takeawayUpgradeRequest:';
 const ALLOWED_TOWER_NUMBERS = ['1', '2', '3', '4', '5', '6', '7', '8', '9', 'TH'];
 const SEASON_PASS_DAY_NAME = 'Season Pass';
 const DEFAULT_SEASON_PASS_PRICE = 1450;
@@ -169,6 +172,7 @@ function validateBooking(payload) {
   const whatsAppNumber = validateWhatsAppNumber(payload.whatsAppNumber);
   const donation = validateDonation(payload.donation);
   const bookingItems = validateBookingItems(payload.bookingItems, payableAmount, donation);
+  const bookingRequestId = validateBookingRequestId(payload.bookingRequestId);
 
   if (!['cash', 'cheque', 'upi'].includes(paymentMethod)) throw new Error('Choose cash, cheque, or UPI.');
   if (!Number.isFinite(payableAmount) || payableAmount <= 0) throw new Error('A valid payable amount is required.');
@@ -177,7 +181,50 @@ function validateBooking(payload) {
     throw new Error('A cheque number or UPI transaction ID is required.');
   }
 
-  return { towerNumber, apartmentNumber, paymentMethod, payableAmount, paymentReference, bookingDetails, bookingItems, donation, whatsAppNumber };
+  return { towerNumber, apartmentNumber, paymentMethod, payableAmount, paymentReference, bookingDetails, bookingItems, donation, whatsAppNumber, bookingRequestId };
+}
+
+function validateBookingRequestId(value) {
+  const requestId = String(value || '').trim();
+  if (!requestId) return '';
+  if (requestId.length > 80 || !/^[A-Za-z0-9_-]+$/.test(requestId)) {
+    throw new Error('The booking request ID is invalid.');
+  }
+  return requestId;
+}
+
+function buildBookingRequestFingerprint(booking) {
+  return JSON.stringify({
+    towerNumber: booking.towerNumber,
+    apartmentNumber: booking.apartmentNumber,
+    paymentMethod: booking.paymentMethod,
+    payableAmount: booking.payableAmount,
+    paymentReference: booking.paymentReference,
+    bookingDetails: booking.bookingDetails,
+    bookingItems: booking.bookingItems,
+    donation: booking.donation,
+    whatsAppNumber: booking.whatsAppNumber,
+  });
+}
+
+function getCompletedBookingRequest(requestId, requestFingerprint) {
+  if (!requestId) return null;
+  const savedValue = PropertiesService.getScriptProperties().getProperty(`${BOOKING_REQUEST_PROPERTY_PREFIX}${requestId}`);
+  if (!savedValue) return null;
+
+  const savedRequest = JSON.parse(savedValue);
+  if (savedRequest.fingerprint !== requestFingerprint) {
+    throw new Error('This booking request ID was already used for a different booking.');
+  }
+  return savedRequest.result;
+}
+
+function saveCompletedBookingRequest(requestId, requestFingerprint, result) {
+  if (!requestId) return;
+  PropertiesService.getScriptProperties().setProperty(
+    `${BOOKING_REQUEST_PROPERTY_PREFIX}${requestId}`,
+    JSON.stringify({ fingerprint: requestFingerprint, result }),
+  );
 }
 
 function validateBookingItems(value, payableAmount, donation) {
@@ -198,6 +245,7 @@ function validateBookingItems(value, payableAmount, donation) {
     const source = String(item.source || '').trim();
 
     if (!dayName) throw new Error('Each booking item needs a day name.');
+    if (isPastFoodMenuDate(dayDate)) throw new Error(`${dayName} is no longer available for booking.`);
     if (!mealType) throw new Error('Each booking item needs a meal type.');
     if (source === 'Individual' && !['Veg', 'Non-Veg'].includes(foodType)) throw new Error('Each individual booking item needs Veg or Non-Veg.');
     if (source === 'Individual' && !['Dine-In', 'Takeaway'].includes(serviceType)) throw new Error('Each individual booking item needs Dine-In or Takeaway.');
@@ -529,24 +577,42 @@ function upgradeToTakeaway(payload) {
   const towerNumber = validateTowerNumber(payload.towerNumber);
   const apartmentNumber = validateApartmentNumber(payload.apartmentNumber);
   const aptNo = formatAptNo(towerNumber, apartmentNumber);
-  const rowNumbers = validateManagedItemIds(payload.itemIds);
+  const itemUpgrades = validateManagedItemUpgrades(payload.itemUpgrades, payload.itemIds);
   const payment = validateUpgradePayment(payload);
+  const requestId = validateUpgradeRequestId(payload.upgradeRequestId);
+  const requestFingerprint = buildUpgradeRequestFingerprint(aptNo, itemUpgrades, payment);
   const lock = LockService.getScriptLock();
   lock.waitLock(30000);
 
   try {
+    const completedUpgrade = getCompletedUpgradeRequest(requestId, requestFingerprint);
+    if (completedUpgrade) return completedUpgrade;
+
     const sheet = getBookingItemsSheet();
     const range = sheet.getDataRange();
     const rows = range.getValues();
     const displayRows = range.getDisplayValues();
     const priceMap = getFoodMenuPriceMap();
-    const selectedItems = rowNumbers.map((rowNumber) => {
+    const selectedItems = itemUpgrades.map((upgrade) => {
+      const rowNumber = upgrade.rowNumber;
       if (rowNumber < 2 || rowNumber > rows.length) throw new Error('One selected booking item no longer exists.');
 
       const item = buildManagedBookingItem(rows[rowNumber - 1], displayRows[rowNumber - 1], rowNumber, priceMap);
       if (normalizeAptNo(item.aptNo) !== normalizeAptNo(aptNo)) throw new Error('One selected booking item belongs to another apartment.');
       if (!item.upgradeable) throw new Error(`${item.bookingReference} ${item.dayName} ${item.mealType} is not eligible for takeaway upgrade.`);
-      return item;
+      const upgradeQuantity = upgrade.quantity === null ? item.quantity : upgrade.quantity;
+      if (upgradeQuantity > item.quantity) {
+        throw new Error(`${item.bookingReference} ${item.dayName} ${item.mealType} only has ${item.quantity} coupons available.`);
+      }
+
+      return {
+        ...item,
+        originalQuantity: item.quantity,
+        quantity: upgradeQuantity,
+        lineTotal: item.unitPrice * upgradeQuantity,
+        extraTotal: item.extraUnitPrice * upgradeQuantity,
+        sourceRow: rows[rowNumber - 1].slice(0, BOOKING_ITEM_HEADERS.length),
+      };
     });
     const expectedPayableAmount = selectedItems.reduce((sum, item) => sum + item.extraTotal, 0);
     if (Math.abs(expectedPayableAmount - payment.payableAmount) > 0.01) {
@@ -560,13 +626,34 @@ function upgradeToTakeaway(payload) {
     const createdAt = new Date();
     const bookingReferences = uniqueValues(selectedItems.map((item) => item.bookingReference));
     const bookingSnapshots = snapshotBookingRows(bookingReferences, aptNo);
+    const upgradeResult = {
+      upgradeReference: bookingReferences.join(', '),
+      updatedBookingReferences: bookingReferences,
+      updatedItemCount: selectedItems.length,
+      updatedCouponCount: selectedItems.reduce((sum, item) => sum + item.quantity, 0),
+      payableAmount: payment.payableAmount,
+    };
+    let appendedStartRow = 0;
+    let appendedRowCount = 0;
 
     try {
+      const appendedRows = [];
       selectedItems.forEach((item) => {
-        const updatedLineTotal = item.takeawayUnitPrice * item.quantity;
-        sheet.getRange(item.rowNumber, 7, 1, 4).setValues([['Takeaway', item.quantity, item.takeawayUnitPrice, updatedLineTotal]]);
+        const change = buildTakeawayUpgradeChange(item);
+        sheet.getRange(item.rowNumber, 7, 1, 4).setValues([change.originalRowValues]);
         sheet.getRange(item.rowNumber, 9, 1, 2).setNumberFormat('₹#,##0.00');
+        if (change.appendedRow) appendedRows.push(change.appendedRow);
       });
+
+      if (appendedRows.length) {
+        appendedStartRow = sheet.getLastRow() + 1;
+        sheet.getRange(appendedStartRow, 3, appendedRows.length, 1).setNumberFormat('@');
+        sheet.getRange(appendedStartRow, 12, appendedRows.length, 1).setNumberFormat('@');
+        sheet.getRange(appendedStartRow, 1, appendedRows.length, BOOKING_ITEM_HEADERS.length).setValues(appendedRows);
+        appendedRowCount = appendedRows.length;
+        sheet.getRange(appendedStartRow, 2, appendedRowCount, 1).setNumberFormat('yyyy-mm-dd hh:mm:ss');
+        sheet.getRange(appendedStartRow, 9, appendedRowCount, 2).setNumberFormat('₹#,##0.00');
+      }
 
       updateBookingRowsAfterTakeawayUpgrade({
         createdAt,
@@ -574,33 +661,114 @@ function upgradeToTakeaway(payload) {
         payment,
         selectedItems,
       });
+      saveCompletedUpgradeRequest(requestId, requestFingerprint, upgradeResult);
     } catch (error) {
+      if (appendedRowCount) sheet.deleteRows(appendedStartRow, appendedRowCount);
       itemSnapshots.forEach((snapshot) => sheet.getRange(snapshot.rowNumber, 7, 1, 4).setValues([snapshot.values]));
       restoreBookingRows(bookingSnapshots);
       throw error;
     }
 
-    return {
-      upgradeReference: bookingReferences.join(', '),
-      updatedBookingReferences: bookingReferences,
-      updatedItemCount: selectedItems.length,
-      payableAmount: payment.payableAmount,
-    };
+    return upgradeResult;
   } finally {
     lock.releaseLock();
   }
 }
 
-function validateManagedItemIds(value) {
-  if (!Array.isArray(value) || value.length === 0) throw new Error('Select at least one dine-in item to switch to takeaway.');
+function validateUpgradeRequestId(value) {
+  const requestId = String(value || '').trim();
+  if (!requestId) return '';
+  if (requestId.length > 80 || !/^[A-Za-z0-9_-]+$/.test(requestId)) {
+    throw new Error('The takeaway upgrade request ID is invalid.');
+  }
+  return requestId;
+}
 
-  const rowNumbers = value.map((itemId) => {
-    const match = String(itemId || '').trim().match(/^row-(\d+)$/);
-    if (!match) throw new Error('A selected booking item has an invalid ID.');
-    return Number(match[1]);
+function buildUpgradeRequestFingerprint(aptNo, itemUpgrades, payment) {
+  return JSON.stringify({
+    aptNo: normalizeAptNo(aptNo),
+    itemUpgrades,
+    paymentMethod: payment.paymentMethod,
+    payableAmount: payment.payableAmount,
+  });
+}
+
+function getCompletedUpgradeRequest(requestId, requestFingerprint) {
+  if (!requestId) return null;
+  const savedValue = PropertiesService.getScriptProperties().getProperty(`${UPGRADE_REQUEST_PROPERTY_PREFIX}${requestId}`);
+  if (!savedValue) return null;
+
+  const savedRequest = JSON.parse(savedValue);
+  if (savedRequest.fingerprint !== requestFingerprint) {
+    throw new Error('This takeaway upgrade request ID was already used for a different selection.');
+  }
+  return savedRequest.result;
+}
+
+function saveCompletedUpgradeRequest(requestId, requestFingerprint, result) {
+  if (!requestId) return;
+  PropertiesService.getScriptProperties().setProperty(
+    `${UPGRADE_REQUEST_PROPERTY_PREFIX}${requestId}`,
+    JSON.stringify({ fingerprint: requestFingerprint, result }),
+  );
+}
+
+function buildTakeawayUpgradeChange(item) {
+  const remainingQuantity = item.originalQuantity - item.quantity;
+  if (remainingQuantity < 0) throw new Error('The takeaway quantity exceeds the available quantity.');
+
+  if (remainingQuantity === 0) {
+    return {
+      originalRowValues: ['Takeaway', item.quantity, item.takeawayUnitPrice, item.takeawayUnitPrice * item.quantity],
+      appendedRow: null,
+    };
+  }
+
+  const appendedRow = item.sourceRow.slice(0, BOOKING_ITEM_HEADERS.length);
+  appendedRow[6] = 'Takeaway';
+  appendedRow[7] = item.quantity;
+  appendedRow[8] = item.takeawayUnitPrice;
+  appendedRow[9] = item.takeawayUnitPrice * item.quantity;
+
+  return {
+    originalRowValues: ['Dine-In', remainingQuantity, item.unitPrice, item.unitPrice * remainingQuantity],
+    appendedRow,
+  };
+}
+
+function validateManagedItemUpgrades(value, legacyItemIds) {
+  let upgrades;
+  if (Array.isArray(value) && value.length > 0) {
+    upgrades = value.map((upgrade) => {
+      if (!upgrade || typeof upgrade !== 'object' || Array.isArray(upgrade)) {
+        throw new Error('A selected booking item has an invalid upgrade quantity.');
+      }
+
+      const match = String(upgrade.itemId || '').trim().match(/^row-(\d+)$/);
+      const quantity = Number(upgrade.quantity);
+      if (!match) throw new Error('A selected booking item has an invalid ID.');
+      if (!Number.isInteger(quantity) || quantity <= 0) {
+        throw new Error('Each takeaway upgrade needs a valid coupon quantity.');
+      }
+      return { rowNumber: Number(match[1]), quantity };
+    });
+  } else if (Array.isArray(legacyItemIds) && legacyItemIds.length > 0) {
+    upgrades = legacyItemIds.map((itemId) => {
+      const match = String(itemId || '').trim().match(/^row-(\d+)$/);
+      if (!match) throw new Error('A selected booking item has an invalid ID.');
+      return { rowNumber: Number(match[1]), quantity: null };
+    });
+  } else {
+    throw new Error('Select at least one dine-in item to switch to takeaway.');
+  }
+
+  const seenRowNumbers = {};
+  upgrades.forEach((upgrade) => {
+    if (seenRowNumbers[upgrade.rowNumber]) throw new Error('A booking item can only be selected once.');
+    seenRowNumbers[upgrade.rowNumber] = true;
   });
 
-  return uniqueValues(rowNumbers);
+  return upgrades;
 }
 
 function validateUpgradePayment(payload) {
@@ -804,7 +972,10 @@ function getFoodMenu() {
   const rows = sheet.getDataRange().getValues().slice(1);
   const days = [];
   const dayIndexes = {};
-  const seasonPass = buildSeasonPassConfig(rows);
+  const configuredSeasonPass = buildSeasonPassConfig(rows);
+  const seasonPass = configuredSeasonPass && configuredSeasonPass.includedDates.some((dayDate) => isPastFoodMenuDate(dayDate))
+    ? null
+    : configuredSeasonPass;
 
   rows.forEach((row) => {
     const dayName = String(row[0] || '').trim();
@@ -814,6 +985,7 @@ function getFoodMenu() {
     if (isSeasonPassMenuRow(row)) return;
     if (!dayName && !mealTime) return;
     if (!dayName || !mealTime) throw new Error('Each food menu row needs both Day and Meal Time.');
+    if (isPastFoodMenuDate(dayDate)) return;
 
     const meals = buildFoodMenuMeals(row, dayName, dayDate, mealTime);
     if (!meals.length) return;
@@ -838,6 +1010,27 @@ function foodMenuDateForRow(row, dayName) {
 function formatFoodMenuDateValue(value) {
   if (value instanceof Date) return Utilities.formatDate(value, Session.getScriptTimeZone(), 'yyyy-MM-dd');
   return normalizeFoodMenuDateString(String(value || '').trim());
+}
+
+function isPastFoodMenuDate(value, currentDate) {
+  const dayDate = formatFoodMenuDateValue(value);
+  const match = dayDate.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) return false;
+
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const parsedDate = new Date(Date.UTC(year, month - 1, day));
+  if (
+    parsedDate.getUTCFullYear() !== year ||
+    parsedDate.getUTCMonth() !== month - 1 ||
+    parsedDate.getUTCDate() !== day
+  ) {
+    return false;
+  }
+
+  const today = currentDate || Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd');
+  return dayDate < today;
 }
 
 function normalizeFoodMenuDateString(value) {
@@ -1086,8 +1279,8 @@ function headerIndex(row, headers) {
 }
 
 function getDonationSheet() {
-  const sheet = SpreadsheetApp.openById(DONATIONS_SPREADSHEET_ID).getSheetByName(DONATIONS_SHEET_NAME);
-  if (!sheet) throw new Error(`Could not find a tab named "${DONATIONS_SHEET_NAME}" in the donations spreadsheet.`);
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(DONATIONS_SHEET_NAME);
+  if (!sheet) throw new Error(`Could not find a tab named "${DONATIONS_SHEET_NAME}" in the booking spreadsheet.`);
   return sheet;
 }
 
@@ -1108,6 +1301,8 @@ function getDonationColumns(sheet) {
     nameColumnIndex: headerIndex(headerRow, DONATION_NAME_HEADERS),
     amountColumnIndex: headerIndex(headerRow, DONATION_AMOUNT_HEADERS),
     transactionColumnIndex: headerIndex(headerRow, DONATION_TRANSACTION_HEADERS),
+    dateColumnIndex: headerIndex(headerRow, DONATION_DATE_HEADERS),
+    phoneColumnIndex: headerIndex(headerRow, DONATION_PHONE_HEADERS),
   };
 }
 
@@ -1147,28 +1342,34 @@ function appendDonation(booking) {
     columns.nameColumnIndex,
     columns.amountColumnIndex,
     columns.transactionColumnIndex,
+    columns.dateColumnIndex,
+    columns.phoneColumnIndex,
   ];
   if (writeColumns.some((columnIndex) => columnIndex === -1)) {
-    throw new Error('The donations sheet must include Receipt No., TWR, Apt. No., NAME, Amount, and Transaction ID columns.');
+    throw new Error('The donations sheet must include Receipt No., TWR, Apt. No., NAME, Amount, Transaction ID, Date, and Ph # columns.');
   }
   if (columns.rows.slice(columns.headerRowIndex + 1).some((row) => normalizeTowerNumber(row[columns.towerColumnIndex]) === booking.towerNumber && normalizeApartmentNumber(row[columns.apartmentColumnIndex]) === booking.apartmentNumber)) {
     throw new Error('A donation record already exists for this tower and apartment.');
   }
 
   const receiptNumber = nextDonationReceiptNumber(columns.rows, columns.headerRowIndex, columns.receiptColumnIndex);
-  const row = Array(Math.max(sheet.getLastColumn(), columns.transactionColumnIndex + 1)).fill('');
+  const row = Array(Math.max(sheet.getLastColumn(), ...writeColumns.map((columnIndex) => columnIndex + 1))).fill('');
   row[columns.receiptColumnIndex] = receiptNumber;
   row[columns.towerColumnIndex] = booking.towerNumber;
   row[columns.apartmentColumnIndex] = booking.apartmentNumber;
   row[columns.nameColumnIndex] = plainSheetText(booking.donation.name);
   row[columns.amountColumnIndex] = booking.donation.amount;
   row[columns.transactionColumnIndex] = booking.paymentMethod === 'cash' ? 'CASH' : booking.paymentReference;
+  row[columns.dateColumnIndex] = new Date();
+  row[columns.phoneColumnIndex] = formatWhatsAppNumberForSheet(booking.whatsAppNumber);
 
   let savedRow = 0;
   try {
     sheet.appendRow(row);
     savedRow = sheet.getLastRow();
     sheet.getRange(savedRow, columns.amountColumnIndex + 1).setNumberFormat('₹#,##0.00');
+    sheet.getRange(savedRow, columns.dateColumnIndex + 1).setNumberFormat('yyyy-mm-dd');
+    sheet.getRange(savedRow, columns.phoneColumnIndex + 1).setNumberFormat('@').setValue(formatWhatsAppNumberForSheet(booking.whatsAppNumber));
     return { receiptNumber, savedRow };
   } catch (error) {
     if (savedRow) sheet.deleteRow(savedRow);
@@ -1303,10 +1504,15 @@ function plainSheetText(value) {
 }
 
 function appendBooking(booking) {
+  const requestId = booking.bookingRequestId;
+  const requestFingerprint = buildBookingRequestFingerprint(booking);
   const lock = LockService.getScriptLock();
   lock.waitLock(30000);
 
   try {
+    const completedBooking = getCompletedBookingRequest(requestId, requestFingerprint);
+    if (completedBooking) return completedBooking;
+
     const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(BOOKINGS_SHEET_NAME);
     if (!sheet) throw new Error(`Could not find a tab named "${BOOKINGS_SHEET_NAME}".`);
     assertHeaders(sheet);
@@ -1332,12 +1538,14 @@ function appendBooking(booking) {
 
     const savedRow = sheet.getLastRow();
     let savedBookingItemCount = 0;
+    let savedDonationRow = 0;
     try {
       sheet.getRange(savedRow, 3).setNumberFormat('yyyy-mm-dd hh:mm:ss');
       sheet.getRange(savedRow, 6).setNumberFormat('₹#,##0.00');
       sheet.getRange(savedRow, 9).setNumberFormat('@').setValue(formatWhatsAppNumberForSheet(booking.whatsAppNumber));
       savedBookingItemCount = appendBookingItems(booking, bookingReference, createdAt);
       const donation = booking.donation ? appendDonation(booking) : null;
+      savedDonationRow = donation ? donation.savedRow : 0;
       const whatsAppConfirmation = sendWhatsAppConfirmation(booking, bookingReference);
       sheet.getRange(savedRow, 10, 1, 3).setValues([[
         whatsAppConfirmation.status,
@@ -1346,7 +1554,7 @@ function appendBooking(booking) {
       ]]);
       if (whatsAppConfirmation.sentAt) sheet.getRange(savedRow, 12).setNumberFormat('yyyy-mm-dd hh:mm:ss');
 
-      return {
+      const result = {
         serialNumber,
         bookingReference,
         createdAt: createdAt.toISOString(),
@@ -1354,7 +1562,10 @@ function appendBooking(booking) {
         donationReceiptNumber: donation ? donation.receiptNumber : null,
         whatsAppStatus: whatsAppConfirmation.status,
       };
+      saveCompletedBookingRequest(requestId, requestFingerprint, result);
+      return result;
     } catch (error) {
+      if (savedDonationRow) getDonationSheet().deleteRow(savedDonationRow);
       if (savedBookingItemCount) deleteBookingItems(bookingReference);
       sheet.deleteRow(savedRow);
       throw error;
