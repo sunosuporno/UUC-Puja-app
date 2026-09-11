@@ -10,10 +10,20 @@ const DONATION_NAME_HEADERS = ['Name'];
 const DONATION_AMOUNT_HEADERS = ['Amount'];
 const DONATION_TRANSACTION_HEADERS = ['Transaction ID', 'Transction ID'];
 const DONATION_AMOUNT = 4000;
+const APARTMENT_NUMBER_MAX_LENGTH = 20;
+const DONOR_NAME_MAX_LENGTH = 80;
+const ALLOWED_TOWER_NUMBERS = ['1', '2', '3', '4', '5', '6', '7', '8', '9', 'TH'];
 const SEASON_PASS_DAY_NAME = 'Season Pass';
 const DEFAULT_SEASON_PASS_PRICE = 1450;
 const DEFAULT_SEASON_PASS_MEAL_TYPE = 'Lunch';
 const DEFAULT_SEASON_PASS_INCLUDED_DAYS = ['Saptami 1', 'Saptami 2', 'Ashtami', 'Nabami'];
+const WHATSAPP_GRAPH_API_VERSION = 'v26.0';
+const WHATSAPP_PROPERTY_KEYS = {
+  phoneNumberId: 'WHATSAPP_PHONE_NUMBER_ID',
+  accessToken: 'WHATSAPP_ACCESS_TOKEN',
+  templateName: 'WHATSAPP_TEMPLATE_NAME',
+  templateLanguage: 'WHATSAPP_TEMPLATE_LANGUAGE',
+};
 const EXPECTED_HEADERS = [
   'Sl No',
   'Booking Reference',
@@ -23,6 +33,10 @@ const EXPECTED_HEADERS = [
   'Payable Amount',
   'UPI Txn Id/cheque number',
   'Booking Details',
+  'WhatsApp Number',
+  'WhatsApp Status',
+  'WhatsApp Message ID',
+  'WhatsApp Sent At',
 ];
 const BOOKING_ITEM_HEADERS = [
   'Booking Reference',
@@ -49,53 +63,100 @@ const FOOD_MENU_HEADERS = [
   'Non-Veg Dine-In Price',
   'Date',
 ];
+const DEFAULT_EVENT_YEAR = 2026;
 const FALLBACK_FOOD_MENU_DAY_DATES = {
-  Sashthi: '16 Oct',
-  'Saptami 1': '17 Oct',
-  'Saptami 2': '18 Oct',
-  Ashtami: '19 Oct',
-  Nabami: '20 Oct',
-  Dashami: '21 Oct',
+  Sashthi: '2026-10-16',
+  'Saptami 1': '2026-10-17',
+  'Saptami 2': '2026-10-18',
+  Ashtami: '2026-10-19',
+  Nabami: '2026-10-20',
+  Dashami: '2026-10-21',
 };
-const ADMIN_DAY_ORDER = ['16 Oct', '17 Oct', '18 Oct', '19 Oct', '20 Oct', '21 Oct'];
+const ADMIN_DAY_ORDER = ['2026-10-16', '2026-10-17', '2026-10-18', '2026-10-19', '2026-10-20', '2026-10-21'];
+const MONTH_ABBREVIATIONS = {
+  jan: '01',
+  january: '01',
+  feb: '02',
+  february: '02',
+  mar: '03',
+  march: '03',
+  apr: '04',
+  april: '04',
+  may: '05',
+  jun: '06',
+  june: '06',
+  jul: '07',
+  july: '07',
+  aug: '08',
+  august: '08',
+  sep: '09',
+  sept: '09',
+  september: '09',
+  oct: '10',
+  october: '10',
+  nov: '11',
+  november: '11',
+  dec: '12',
+  december: '12',
+};
 const ADMIN_MEAL_ORDER = ['Breakfast', 'Lunch', 'Dinner'];
 
-function doGet() {
-  return jsonResponse({ ok: true, service: 'UUC Pujo bookings' });
+function doGet(event) {
+  try {
+    const payload = parseGetPayload(event);
+    if (!payload || !Object.keys(payload).length) return jsonResponse({ ok: true, service: 'UUC Pujo bookings' });
+    return handlePayload(payload);
+  } catch (error) {
+    return jsonResponse({ ok: false, error: error.message || 'Unable to process request.' });
+  }
 }
 
 function doPost(event) {
   try {
-    const payload = JSON.parse(event.postData.contents || '{}');
-
-    if (payload.action === 'checkDonation') {
-      const towerNumber = validateTowerNumber(payload.towerNumber);
-      const apartmentNumber = validateApartmentNumber(payload.apartmentNumber);
-      return jsonResponse({ ok: true, eligible: hasDonationRecord(towerNumber, apartmentNumber) });
-    }
-
-    if (payload.action === 'getFoodMenu') {
-      return jsonResponse({ ok: true, menu: getFoodMenu() });
-    }
-
-    if (payload.action === 'getBookingsForApartment') {
-      return jsonResponse({ ok: true, bookings: getBookingsForApartment(payload) });
-    }
-
-    if (payload.action === 'getAdminSummary') {
-      return jsonResponse({ ok: true, summary: getAdminSummary() });
-    }
-
-    if (payload.action === 'upgradeToTakeaway') {
-      return jsonResponse({ ok: true, upgrade: upgradeToTakeaway(payload) });
-    }
-
-    const booking = validateBooking(payload);
-    const savedBooking = appendBooking(booking);
-    return jsonResponse({ ok: true, booking: savedBooking });
+    return handlePayload(parsePostPayload(event));
   } catch (error) {
     return jsonResponse({ ok: false, error: error.message || 'Unable to save booking.' });
   }
+}
+
+function parseGetPayload(event) {
+  const parameter = event && event.parameter ? event.parameter : {};
+  if (parameter.payload) return JSON.parse(parameter.payload);
+  return parameter;
+}
+
+function parsePostPayload(event) {
+  if (!event || !event.postData) return {};
+  return JSON.parse(event.postData.contents || '{}');
+}
+
+function handlePayload(payload) {
+  if (payload.action === 'checkDonation') {
+    const towerNumber = validateTowerNumber(payload.towerNumber);
+    const apartmentNumber = validateApartmentNumber(payload.apartmentNumber);
+    const donationRecord = getDonationRecord(towerNumber, apartmentNumber);
+    return jsonResponse({ ok: true, eligible: Boolean(donationRecord), donorName: donationRecord ? donationRecord.name : '' });
+  }
+
+  if (payload.action === 'getFoodMenu') {
+    return jsonResponse({ ok: true, menu: getFoodMenu() });
+  }
+
+  if (payload.action === 'getBookingsForApartment') {
+    return jsonResponse({ ok: true, bookings: getBookingsForApartment(payload) });
+  }
+
+  if (payload.action === 'getAdminSummary') {
+    return jsonResponse({ ok: true, summary: getAdminSummary() });
+  }
+
+  if (payload.action === 'upgradeToTakeaway') {
+    return jsonResponse({ ok: true, upgrade: upgradeToTakeaway(payload) });
+  }
+
+  const booking = validateBooking(payload);
+  const savedBooking = appendBooking(booking);
+  return jsonResponse({ ok: true, booking: savedBooking });
 }
 
 function validateBooking(payload) {
@@ -105,6 +166,7 @@ function validateBooking(payload) {
   const payableAmount = Number(payload.payableAmount);
   const paymentReference = String(payload.paymentReference || '').trim();
   const bookingDetails = String(payload.bookingDetails || '').trim();
+  const whatsAppNumber = validateWhatsAppNumber(payload.whatsAppNumber);
   const donation = validateDonation(payload.donation);
   const bookingItems = validateBookingItems(payload.bookingItems, payableAmount, donation);
 
@@ -115,7 +177,7 @@ function validateBooking(payload) {
     throw new Error('A cheque number or UPI transaction ID is required.');
   }
 
-  return { towerNumber, apartmentNumber, paymentMethod, payableAmount, paymentReference, bookingDetails, bookingItems, donation };
+  return { towerNumber, apartmentNumber, paymentMethod, payableAmount, paymentReference, bookingDetails, bookingItems, donation, whatsAppNumber };
 }
 
 function validateBookingItems(value, payableAmount, donation) {
@@ -126,7 +188,7 @@ function validateBookingItems(value, payableAmount, donation) {
   const foodMenuDayDates = getFoodMenuDayDateMap();
   const bookingItems = value.map((item) => {
     const dayName = String(item.dayName || '').trim();
-    const dayDate = String(item.dayDate || '').trim() || foodMenuDayDates[slugify(dayName)] || FALLBACK_FOOD_MENU_DAY_DATES[dayName] || '';
+    const dayDate = formatFoodMenuDateValue(item.dayDate) || foodMenuDayDates[slugify(dayName)] || FALLBACK_FOOD_MENU_DAY_DATES[dayName] || '';
     const mealType = String(item.mealType || '').trim();
     const foodType = String(item.foodType || '').trim();
     const serviceType = String(item.serviceType || '').trim();
@@ -309,7 +371,7 @@ function buildAdminSummaryItem(row, displayRow) {
     quantity: Number(row[7]) || 0,
     lineTotal: parseAmount(row[9], displayRow[9]),
     source: String(displayRow[10] || '').trim(),
-    dayDate: String(displayRow[11] || '').trim() || FALLBACK_FOOD_MENU_DAY_DATES[dayName] || '',
+    dayDate: formatFoodMenuDateValue(row[11]) || formatFoodMenuDateValue(displayRow[11]) || FALLBACK_FOOD_MENU_DAY_DATES[dayName] || '',
   };
 }
 
@@ -434,7 +496,7 @@ function buildManagedBookingItem(row, displayRow, rowNumber, priceMap) {
   const unitPrice = parseAmount(row[8], displayRow[8]);
   const lineTotal = parseAmount(row[9], displayRow[9]);
   const source = String(displayRow[10] || '').trim();
-  const dayDate = String(displayRow[11] || '').trim() || FALLBACK_FOOD_MENU_DAY_DATES[dayName] || '';
+  const dayDate = formatFoodMenuDateValue(row[11]) || formatFoodMenuDateValue(displayRow[11]) || FALLBACK_FOOD_MENU_DAY_DATES[dayName] || '';
   const menuPrice = priceMap[foodMenuPriceKey(dayDate, mealType, foodType)] || priceMap[foodMenuPriceKey(dayName, mealType, foodType)];
   const takeawayUnitPrice = menuPrice ? menuPrice.takeawayPrice : 0;
   const extraUnitPrice = takeawayUnitPrice - unitPrice;
@@ -774,8 +836,34 @@ function foodMenuDateForRow(row, dayName) {
 }
 
 function formatFoodMenuDateValue(value) {
-  if (value instanceof Date) return Utilities.formatDate(value, Session.getScriptTimeZone(), 'd MMM');
-  return String(value || '').trim();
+  if (value instanceof Date) return Utilities.formatDate(value, Session.getScriptTimeZone(), 'yyyy-MM-dd');
+  return normalizeFoodMenuDateString(String(value || '').trim());
+}
+
+function normalizeFoodMenuDateString(value) {
+  if (!value) return '';
+
+  const isoMatch = value.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+  if (isoMatch) return buildIsoDate(isoMatch[1], isoMatch[2], isoMatch[3]);
+
+  const dayFirstMatch = value.match(/^(\d{1,2})[\s/-]+([A-Za-z]+)[\s,/-]*(\d{4})?$/);
+  if (dayFirstMatch) {
+    const month = MONTH_ABBREVIATIONS[dayFirstMatch[2].toLowerCase()];
+    if (month) return buildIsoDate(dayFirstMatch[3] || DEFAULT_EVENT_YEAR, month, dayFirstMatch[1]);
+  }
+
+  const slashMatch = value.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{4})$/);
+  if (slashMatch) return buildIsoDate(slashMatch[3], slashMatch[2], slashMatch[1]);
+
+  return value;
+}
+
+function buildIsoDate(year, month, day) {
+  return [
+    String(year).padStart(4, '0'),
+    String(month).padStart(2, '0'),
+    String(day).padStart(2, '0'),
+  ].join('-');
 }
 
 function normalizeDayDate(value) {
@@ -895,28 +983,63 @@ function slugify(value) {
 function validateDonation(value) {
   if (!value) return null;
 
-  const name = String(value.name || '').trim();
+  if (typeof value !== 'object' || Array.isArray(value) || typeof value.name !== 'string') {
+    throw new Error('A valid donor name is required.');
+  }
+
+  const name = normalizeDonorName(value.name);
   const amount = Number(value.amount);
-  if (!name) throw new Error('A donor name is required.');
+  if (name.length > DONOR_NAME_MAX_LENGTH || !/^\p{L}[\p{L}\p{M} .'’\-]*$/u.test(name)) {
+    throw new Error('Enter a valid donor name beginning with a letter.');
+  }
   if (amount !== DONATION_AMOUNT) throw new Error(`The Pujo donation amount must be ₹${DONATION_AMOUNT}.`);
 
   return { name, amount };
 }
 
 function validateTowerNumber(value) {
+  if (typeof value !== 'string') throw new Error('Choose a valid tower.');
   const towerNumber = normalizeTowerNumber(value);
-  if (!towerNumber) throw new Error('A tower number is required.');
+  if (!ALLOWED_TOWER_NUMBERS.includes(towerNumber)) throw new Error('Choose a valid tower.');
   return towerNumber;
 }
 
 function validateApartmentNumber(value) {
+  if (typeof value !== 'string') throw new Error('Enter a valid apartment number.');
+  const input = value.trim().toUpperCase().replace(/\s+/g, ' ');
+  if (
+    input.length > APARTMENT_NUMBER_MAX_LENGTH ||
+    !/^[A-Z0-9]+(?:[ -][A-Z0-9]+)*$/.test(input)
+  ) {
+    throw new Error('Enter a valid apartment number using letters, numbers, spaces, or hyphens.');
+  }
   const apartmentNumber = normalizeApartmentNumber(value);
-  if (!apartmentNumber) throw new Error('An apartment number is required.');
   return apartmentNumber;
+}
+
+function validateWhatsAppNumber(value) {
+  if (typeof value !== 'string') throw new Error('Enter a valid 10-digit WhatsApp number.');
+  const digits = value.replace(/\D/g, '');
+  let localNumber = digits;
+  if (digits.length === 12 && digits.startsWith('91')) localNumber = digits.slice(2);
+  if (digits.length === 11 && digits.startsWith('0')) localNumber = digits.slice(1);
+  if (!/^[6-9]\d{9}$/.test(localNumber)) {
+    throw new Error('Enter a valid 10-digit Indian WhatsApp number.');
+  }
+  return `91${localNumber}`;
+}
+
+function formatWhatsAppNumberForSheet(value) {
+  const digits = String(value || '').replace(/\D/g, '');
+  return digits ? `+${digits}` : '';
 }
 
 function normalizeApartmentNumber(value) {
   return String(value || '').trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+}
+
+function normalizeDonorName(value) {
+  return String(value || '').trim().replace(/\s+/g, ' ');
 }
 
 function normalizeTowerNumber(value) {
@@ -988,11 +1111,20 @@ function getDonationColumns(sheet) {
   };
 }
 
-function hasDonationRecord(towerNumber, apartmentNumber) {
+function getDonationRecord(towerNumber, apartmentNumber) {
   const columns = getDonationColumns(getDonationSheet());
-  return columns.rows
+  const row = columns.rows
     .slice(columns.headerRowIndex + 1)
-    .some((row) => normalizeTowerNumber(row[columns.towerColumnIndex]) === towerNumber && normalizeApartmentNumber(row[columns.apartmentColumnIndex]) === apartmentNumber);
+    .find((donationRow) => normalizeTowerNumber(donationRow[columns.towerColumnIndex]) === towerNumber && normalizeApartmentNumber(donationRow[columns.apartmentColumnIndex]) === apartmentNumber);
+
+  if (!row) return null;
+  return {
+    name: columns.nameColumnIndex === -1 ? '' : String(row[columns.nameColumnIndex] || '').trim(),
+  };
+}
+
+function hasDonationRecord(towerNumber, apartmentNumber) {
+  return Boolean(getDonationRecord(towerNumber, apartmentNumber));
 }
 
 function nextDonationReceiptNumber(rows, headerRowIndex, receiptColumnIndex) {
@@ -1028,7 +1160,7 @@ function appendDonation(booking) {
   row[columns.receiptColumnIndex] = receiptNumber;
   row[columns.towerColumnIndex] = booking.towerNumber;
   row[columns.apartmentColumnIndex] = booking.apartmentNumber;
-  row[columns.nameColumnIndex] = booking.donation.name;
+  row[columns.nameColumnIndex] = plainSheetText(booking.donation.name);
   row[columns.amountColumnIndex] = booking.donation.amount;
   row[columns.transactionColumnIndex] = booking.paymentMethod === 'cash' ? 'CASH' : booking.paymentReference;
 
@@ -1042,6 +1174,132 @@ function appendDonation(booking) {
     if (savedRow) sheet.deleteRow(savedRow);
     throw error;
   }
+}
+
+function sendWhatsAppConfirmation(booking, bookingReference) {
+  const properties = PropertiesService.getScriptProperties();
+  const phoneNumberId = String(properties.getProperty(WHATSAPP_PROPERTY_KEYS.phoneNumberId) || '').trim();
+  const accessToken = String(properties.getProperty(WHATSAPP_PROPERTY_KEYS.accessToken) || '').trim();
+  const templateName = String(properties.getProperty(WHATSAPP_PROPERTY_KEYS.templateName) || '').trim();
+  const templateLanguage = String(properties.getProperty(WHATSAPP_PROPERTY_KEYS.templateLanguage) || '').trim();
+  const missingConfig = [];
+
+  if (!phoneNumberId) missingConfig.push(WHATSAPP_PROPERTY_KEYS.phoneNumberId);
+  if (!accessToken) missingConfig.push(WHATSAPP_PROPERTY_KEYS.accessToken);
+  if (!templateName) missingConfig.push(WHATSAPP_PROPERTY_KEYS.templateName);
+  if (!templateLanguage) missingConfig.push(WHATSAPP_PROPERTY_KEYS.templateLanguage);
+
+  if (missingConfig.length) {
+    return {
+      status: `Skipped: missing ${missingConfig.join(', ')}`,
+      messageId: '',
+      sentAt: '',
+    };
+  }
+
+  const endpoint = `https://graph.facebook.com/${WHATSAPP_GRAPH_API_VERSION}/${phoneNumberId}/messages`;
+  const payload = {
+    messaging_product: 'whatsapp',
+    to: booking.whatsAppNumber,
+    type: 'template',
+    template: {
+      name: templateName,
+      language: { code: templateLanguage },
+      components: [
+        {
+          type: 'body',
+          parameters: [
+            whatsappTextParameter('customer_name', getBookingCustomerName(booking)),
+            whatsappTextParameter('booking_id', bookingReference),
+            whatsappTextParameter('flat_number', formatAptNo(booking.towerNumber, booking.apartmentNumber)),
+            whatsappTextParameter('meals_booked', bookingMealsForWhatsApp(booking)),
+            whatsappTextParameter('payment_mode', booking.paymentMethod.toUpperCase()),
+            whatsappTextParameter('total_amount', formatPlainAmount(booking.payableAmount)),
+          ],
+        },
+      ],
+    },
+  };
+
+  try {
+    const response = UrlFetchApp.fetch(endpoint, {
+      method: 'post',
+      contentType: 'application/json',
+      headers: { Authorization: `Bearer ${accessToken}` },
+      payload: JSON.stringify(payload),
+      muteHttpExceptions: true,
+    });
+    const statusCode = response.getResponseCode();
+    const bodyText = response.getContentText();
+    const body = bodyText ? JSON.parse(bodyText) : {};
+    const messageId = body.messages && body.messages[0] ? String(body.messages[0].id || '') : '';
+
+    if (statusCode >= 200 && statusCode < 300 && messageId) {
+      return { status: 'Sent', messageId, sentAt: new Date() };
+    }
+
+    return {
+      status: truncateForCell(`Failed: ${extractWhatsAppError(body) || bodyText || `HTTP ${statusCode}`}`, 450),
+      messageId,
+      sentAt: '',
+    };
+  } catch (error) {
+    return {
+      status: truncateForCell(`Failed: ${error.message || error}`, 450),
+      messageId: '',
+      sentAt: '',
+    };
+  }
+}
+
+function whatsappTextParameter(parameterName, value) {
+  return {
+    type: 'text',
+    parameter_name: parameterName,
+    text: truncateForCell(String(value || '').trim() || '-', 900),
+  };
+}
+
+function getBookingCustomerName(booking) {
+  if (booking.donation && booking.donation.name) return booking.donation.name;
+  try {
+    const donationRecord = getDonationRecord(booking.towerNumber, booking.apartmentNumber);
+    return donationRecord && donationRecord.name ? donationRecord.name : 'Resident';
+  } catch (error) {
+    return 'Resident';
+  }
+}
+
+function bookingMealsForWhatsApp(booking) {
+  return truncateForCell(
+    String(booking.bookingDetails || '')
+      .split(';')
+      .map((detail) => detail.trim())
+      .filter((detail) => detail && !/^Pujo donation\b/i.test(detail))
+      .join('; ') || 'Food coupons',
+    900
+  );
+}
+
+function formatPlainAmount(amount) {
+  return Number(amount).toLocaleString('en-IN');
+}
+
+function extractWhatsAppError(body) {
+  if (!body || !body.error) return '';
+  return [body.error.message, body.error.error_data && body.error.error_data.details]
+    .filter(Boolean)
+    .join(' - ');
+}
+
+function truncateForCell(value, maxLength) {
+  const text = String(value || '');
+  return text.length > maxLength ? `${text.slice(0, maxLength - 3)}...` : text;
+}
+
+function plainSheetText(value) {
+  const text = String(value || '');
+  return /^[=+\-@]/.test(text) ? `'${text}` : text;
 }
 
 function appendBooking(booking) {
@@ -1066,6 +1324,10 @@ function appendBooking(booking) {
       booking.payableAmount,
       booking.paymentReference,
       booking.bookingDetails,
+      formatWhatsAppNumberForSheet(booking.whatsAppNumber),
+      'Pending',
+      '',
+      '',
     ]);
 
     const savedRow = sheet.getLastRow();
@@ -1073,8 +1335,16 @@ function appendBooking(booking) {
     try {
       sheet.getRange(savedRow, 3).setNumberFormat('yyyy-mm-dd hh:mm:ss');
       sheet.getRange(savedRow, 6).setNumberFormat('₹#,##0.00');
+      sheet.getRange(savedRow, 9).setNumberFormat('@').setValue(formatWhatsAppNumberForSheet(booking.whatsAppNumber));
       savedBookingItemCount = appendBookingItems(booking, bookingReference, createdAt);
       const donation = booking.donation ? appendDonation(booking) : null;
+      const whatsAppConfirmation = sendWhatsAppConfirmation(booking, bookingReference);
+      sheet.getRange(savedRow, 10, 1, 3).setValues([[
+        whatsAppConfirmation.status,
+        whatsAppConfirmation.messageId,
+        whatsAppConfirmation.sentAt || '',
+      ]]);
+      if (whatsAppConfirmation.sentAt) sheet.getRange(savedRow, 12).setNumberFormat('yyyy-mm-dd hh:mm:ss');
 
       return {
         serialNumber,
@@ -1082,6 +1352,7 @@ function appendBooking(booking) {
         createdAt: createdAt.toISOString(),
         bookingItemCount: savedBookingItemCount,
         donationReceiptNumber: donation ? donation.receiptNumber : null,
+        whatsAppStatus: whatsAppConfirmation.status,
       };
     } catch (error) {
       if (savedBookingItemCount) deleteBookingItems(bookingReference);

@@ -28,7 +28,10 @@
 
 4. Open `Extensions` > `Apps Script` from that Sheet.
 5. Replace the default `Code.gs` content with `Code.gs` from this folder and save.
-6. Deploy it as a Web app. Choose `Execute as: Me` and grant the app access to run the web app.
-7. Copy the deployed `/exec` URL. That is the URL the Expo app will use to create bookings and manage takeaway upgrades.
+6. In Apps Script settings, enable `Show "appsscript.json" manifest file in editor`, then replace the manifest content with `appsscript.json` from this folder and save.
+7. Deploy it as a Web app. Choose `Execute as: Me`, set access to `Anyone`, and grant the app access to run the web app.
+8. Copy the deployed `/exec` URL. That is the URL the Expo app will use to create bookings and manage takeaway upgrades.
 
 The Sheet does not need to be shared publicly or made editable. The script is bound to the Sheet and runs with the deployer's permissions.
+
+For WhatsApp confirmations, set these Script Properties: `WHATSAPP_PHONE_NUMBER_ID`, `WHATSAPP_ACCESS_TOKEN`, `WHATSAPP_TEMPLATE_NAME`, and `WHATSAPP_TEMPLATE_LANGUAGE`. The manifest uses the `script.storage` scope so the script can read these properties. The booking sheet displays WhatsApp numbers with a leading `+`, but the Cloud API send request uses the required digits-only format internally.

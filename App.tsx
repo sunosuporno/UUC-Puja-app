@@ -79,6 +79,12 @@ type FoodMenuResponse = {
   };
   error?: string;
 };
+type DonationCheckResponse = {
+  ok?: boolean;
+  eligible?: boolean;
+  donorName?: string;
+  error?: string;
+};
 type ManagedBookingItem = {
   id: string;
   rowNumber: number;
@@ -146,6 +152,8 @@ type AdminSummaryResponse = {
 
 const MAX_QUANTITY = 15;
 const DONATION_AMOUNT = 4000;
+const APARTMENT_NUMBER_MAX_LENGTH = 20;
+const DONOR_NAME_MAX_LENGTH = 80;
 const TOWER_OPTIONS = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "TH"];
 const DEFAULT_SEASON_PASS_CONFIG: SeasonPassConfig = {
   price: 1450,
@@ -161,6 +169,106 @@ const CREATOR_EMAIL = "sarkarsuporno36@gmail.com";
 const CREATOR_PHONE = "+91 62894 91245";
 
 const currency = (amount: number) => `Rs. ${amount.toLocaleString("en-IN")}`;
+const phoneDigits = (value: string) => value.replace(/\D/g, "");
+const normalizeWhatsAppInput = (value: string) => {
+  let digits = phoneDigits(value);
+  if (digits.length === 12 && digits.startsWith("91")) digits = digits.slice(2);
+  if (digits.length === 11 && digits.startsWith("0")) digits = digits.slice(1);
+  return digits.slice(0, 10);
+};
+const isValidWhatsAppNumber = (value: string) => {
+  const digits = phoneDigits(value);
+  return /^[6-9]\d{9}$/.test(digits);
+};
+const normalizeApartmentInput = (value: string) =>
+  value.trim().toUpperCase().replace(/\s+/g, " ");
+const isValidApartmentNumber = (value: string) => {
+  const normalized = normalizeApartmentInput(value);
+  return (
+    normalized.length <= APARTMENT_NUMBER_MAX_LENGTH &&
+    /^[A-Z0-9]+(?:[ -][A-Z0-9]+)*$/.test(normalized)
+  );
+};
+const normalizeDonorName = (value: string) => value.trim().replace(/\s+/g, " ");
+const isValidDonorName = (value: string) => {
+  const normalized = normalizeDonorName(value);
+  return (
+    normalized.length <= DONOR_NAME_MAX_LENGTH &&
+    /^\p{L}[\p{L}\p{M} .'’\-]*$/u.test(normalized)
+  );
+};
+const DISPLAY_MONTHS = [
+  "Jan",
+  "Feb",
+  "Mar",
+  "Apr",
+  "May",
+  "Jun",
+  "Jul",
+  "Aug",
+  "Sep",
+  "Oct",
+  "Nov",
+  "Dec",
+];
+
+const displayDayDate = (value: string) => {
+  const match = value.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) return value;
+
+  const monthIndex = Number(match[2]) - 1;
+  const month = DISPLAY_MONTHS[monthIndex];
+  if (!month) return value;
+
+  return `${Number(match[3])} ${month}`;
+};
+
+async function callBookingsApi<T>(payload: Record<string, unknown>): Promise<T> {
+  if (!BOOKINGS_API_URL) {
+    throw new Error("Booking service is not configured yet. Please try again later.");
+  }
+
+  const params = new URLSearchParams({
+    payload: JSON.stringify(payload),
+    _: String(Date.now()),
+  });
+  const separator = BOOKINGS_API_URL.includes("?") ? "&" : "?";
+  const requestUrl = `${BOOKINGS_API_URL}${separator}${params.toString()}`;
+  const response = await fetch(requestUrl, {
+    redirect: "follow",
+    cache: "no-store",
+    headers: {
+      Accept: "application/json",
+    },
+  });
+  const text = await response.text();
+  const trimmedText = text.trim();
+
+  try {
+    const result = JSON.parse(trimmedText) as T;
+    if (!response.ok) {
+      const message =
+        typeof result === "object" &&
+        result !== null &&
+        "error" in result &&
+        typeof result.error === "string"
+          ? result.error
+          : "Booking service returned an error.";
+      throw new Error(message);
+    }
+    return result;
+  } catch (error) {
+    if (error instanceof SyntaxError) {
+      const snippet = trimmedText
+        .replace(/\s+/g, " ")
+        .slice(0, 120);
+      throw new Error(
+        `Booking service returned HTML instead of data. Status: ${response.status}. URL: ${response.url}. First text: ${snippet}`
+      );
+    }
+    throw error;
+  }
+}
 
 function normalizeSeasonPassConfig(
   value: SeasonPassConfig | null | undefined
@@ -238,8 +346,9 @@ export default function App() {
   const [screen, setScreen] = useState<Screen>("phone");
   const [towerNumber, setTowerNumber] = useState("");
   const [apartmentNumber, setApartmentNumber] = useState("");
+  const [whatsAppNumber, setWhatsAppNumber] = useState("");
   const [focusedLocationField, setFocusedLocationField] = useState<
-    "tower" | "apartment" | "name" | null
+    "tower" | "apartment" | "whatsapp" | "name" | null
   >(null);
   const [donationRecordMissing, setDonationRecordMissing] = useState(false);
   const [donationSelected, setDonationSelected] = useState(false);
@@ -298,13 +407,11 @@ export default function App() {
       }
 
       try {
-        const response = await fetch(BOOKINGS_API_URL, {
-          method: "POST",
-          body: JSON.stringify({ action: "getFoodMenu" }),
+        const result = await callBookingsApi<FoodMenuResponse>({
+          action: "getFoodMenu",
         });
-        const result = (await response.json()) as FoodMenuResponse;
 
-        if (!response.ok || !result.ok || !Array.isArray(result.menu?.days)) {
+        if (!result.ok || !Array.isArray(result.menu?.days)) {
           throw new Error(result.error || "Unable to load food menu.");
         }
 
@@ -565,17 +672,13 @@ export default function App() {
     setIsLoadingManagedBookings(true);
 
     try {
-      const response = await fetch(BOOKINGS_API_URL, {
-        method: "POST",
-        body: JSON.stringify({
-          action: "getBookingsForApartment",
-          towerNumber,
-          apartmentNumber,
-        }),
+      const result = await callBookingsApi<ManagedBookingsResponse>({
+        action: "getBookingsForApartment",
+        towerNumber,
+        apartmentNumber,
       });
-      const result = (await response.json()) as ManagedBookingsResponse;
 
-      if (!response.ok || !result.ok || !Array.isArray(result.bookings)) {
+      if (!result.ok || !Array.isArray(result.bookings)) {
         throw new Error(result.error || "Unable to load bookings.");
       }
 
@@ -608,13 +711,11 @@ export default function App() {
     setIsLoadingAdminSummary(true);
 
     try {
-      const response = await fetch(BOOKINGS_API_URL, {
-        method: "POST",
-        body: JSON.stringify({ action: "getAdminSummary" }),
+      const result = await callBookingsApi<AdminSummaryResponse>({
+        action: "getAdminSummary",
       });
-      const result = (await response.json()) as AdminSummaryResponse;
 
-      if (!response.ok || !result.ok || !result.summary) {
+      if (!result.ok || !result.summary) {
         throw new Error(result.error || "Unable to load admin summary.");
       }
 
@@ -637,6 +738,23 @@ export default function App() {
   };
 
   const completeBooking = async (method: PaymentMethod) => {
+    if (!TOWER_OPTIONS.includes(towerNumber)) {
+      setBookingSubmissionError("Choose a valid tower.");
+      return;
+    }
+    if (!isValidApartmentNumber(apartmentNumber)) {
+      setBookingSubmissionError("Enter a valid apartment number.");
+      return;
+    }
+    if (!isValidWhatsAppNumber(whatsAppNumber)) {
+      setBookingSubmissionError("Enter a valid 10-digit WhatsApp number.");
+      return;
+    }
+    if (donationSelected && !isValidDonorName(donorName)) {
+      setBookingSubmissionError("Enter a valid name beginning with a letter.");
+      return;
+    }
+
     if (!BOOKINGS_API_URL) {
       setBookingSubmissionError(
         "Booking service is not configured yet. Please try again later."
@@ -648,30 +766,30 @@ export default function App() {
     setIsSubmitting(true);
 
     try {
-      // No custom headers keeps this a simple cross-origin request for the Apps Script web app.
-      const response = await fetch(BOOKINGS_API_URL, {
-        method: "POST",
-        body: JSON.stringify({
-          towerNumber,
-          apartmentNumber,
-          paymentMethod: method,
-          payableAmount: total,
-          paymentReference:
-            method === "cash"
-              ? ""
-              : method === "cheque"
-              ? chequeNumber
-              : upiTransactionId,
-          bookingDetails,
-          bookingItems,
-          donation: donationSelected
-            ? { name: donorName, amount: DONATION_AMOUNT }
-            : null,
-        }),
+      const result = await callBookingsApi<{
+        ok?: boolean;
+        booking?: { bookingReference?: string };
+        error?: string;
+      }>({
+        towerNumber,
+        apartmentNumber,
+        whatsAppNumber,
+        paymentMethod: method,
+        payableAmount: total,
+        paymentReference:
+          method === "cash"
+            ? ""
+            : method === "cheque"
+            ? chequeNumber
+            : upiTransactionId,
+        bookingDetails,
+        bookingItems,
+        donation: donationSelected
+          ? { name: donorName, amount: DONATION_AMOUNT }
+          : null,
       });
-      const result = await response.json();
 
-      if (!response.ok || !result.ok || !result.booking?.bookingReference) {
+      if (!result.ok || !result.booking?.bookingReference) {
         throw new Error(result.error || "Unable to save booking.");
       }
 
@@ -706,26 +824,26 @@ export default function App() {
     setIsSubmitting(true);
 
     try {
-      const response = await fetch(BOOKINGS_API_URL, {
-        method: "POST",
-        body: JSON.stringify({
-          action: "upgradeToTakeaway",
-          towerNumber,
-          apartmentNumber,
-          itemIds: selectedItemIds,
-          paymentMethod: method,
-          payableAmount: upgradeTotal,
-          paymentReference:
-            method === "cash"
-              ? ""
-              : method === "cheque"
-              ? chequeNumber
-              : upiTransactionId,
-        }),
+      const result = await callBookingsApi<{
+        ok?: boolean;
+        upgrade?: { upgradeReference?: string };
+        error?: string;
+      }>({
+        action: "upgradeToTakeaway",
+        towerNumber,
+        apartmentNumber,
+        itemIds: selectedItemIds,
+        paymentMethod: method,
+        payableAmount: upgradeTotal,
+        paymentReference:
+          method === "cash"
+            ? ""
+            : method === "cheque"
+            ? chequeNumber
+            : upiTransactionId,
       });
-      const result = await response.json();
 
-      if (!response.ok || !result.ok || !result.upgrade?.upgradeReference) {
+      if (!result.ok || !result.upgrade?.upgradeReference) {
         throw new Error(result.error || "Unable to save takeaway upgrade.");
       }
 
@@ -752,6 +870,7 @@ export default function App() {
   const startNewBooking = () => {
     setTowerNumber("");
     setApartmentNumber("");
+    setWhatsAppNumber("");
     setDonationRecordMissing(false);
     setDonationSelected(false);
     setDonationDeclined(false);
@@ -782,11 +901,16 @@ export default function App() {
   };
 
   if (screen === "phone") {
+    const canLocateApartment =
+      TOWER_OPTIONS.includes(towerNumber) &&
+      isValidApartmentNumber(apartmentNumber);
     const canCheckApartment =
-      towerNumber.trim().length > 0 && apartmentNumber.trim().length > 0;
+      canLocateApartment && isValidWhatsAppNumber(whatsAppNumber);
     const canContinueWithDonation =
-      donationSelected && donorName.trim().length > 0;
-    const canManageBookings = canCheckApartment && !isLoadingManagedBookings;
+      donationSelected &&
+      isValidDonorName(donorName) &&
+      isValidWhatsAppNumber(whatsAppNumber);
+    const canManageBookings = canLocateApartment && !isLoadingManagedBookings;
 
     const checkEligibility = async () => {
       if (!BOOKINGS_API_URL) {
@@ -803,26 +927,23 @@ export default function App() {
       setIsCheckingEligibility(true);
 
       try {
-        const response = await fetch(BOOKINGS_API_URL, {
-          method: "POST",
-          body: JSON.stringify({
-            action: "checkDonation",
-            towerNumber,
-            apartmentNumber,
-          }),
+        const result = await callBookingsApi<DonationCheckResponse>({
+          action: "checkDonation",
+          towerNumber,
+          apartmentNumber,
         });
-        const result = await response.json();
 
         if (
-          !response.ok ||
           !result.ok ||
           typeof result.eligible !== "boolean"
         ) {
           throw new Error(result.error || "Unable to check donation records.");
         }
 
-        if (result.eligible) setScreen("booking");
-        else setDonationRecordMissing(true);
+        if (result.eligible) {
+          if (result.donorName) setDonorName(result.donorName);
+          setScreen("booking");
+        } else setDonationRecordMissing(true);
       } catch (error) {
         setEligibilityError(
           error instanceof Error
@@ -977,7 +1098,7 @@ export default function App() {
                       <TextInput
                         value={apartmentNumber}
                         onChangeText={(value) => {
-                          setApartmentNumber(value.slice(0, 20));
+                          setApartmentNumber(value.slice(0, APARTMENT_NUMBER_MAX_LENGTH));
                           setDonationRecordMissing(false);
                           setDonationSelected(false);
                           setDonationDeclined(false);
@@ -987,9 +1108,12 @@ export default function App() {
                         }}
                         autoCapitalize="characters"
                         autoCorrect={false}
-                        maxLength={20}
+                        maxLength={APARTMENT_NUMBER_MAX_LENGTH}
                         onFocus={() => setFocusedLocationField("apartment")}
-                        onBlur={() => setFocusedLocationField(null)}
+                        onBlur={() => {
+                          setApartmentNumber(normalizeApartmentInput(apartmentNumber));
+                          setFocusedLocationField(null);
+                        }}
                         placeholder="e.g. 204 II"
                         placeholderTextColor="#B68473"
                         style={[
@@ -999,10 +1123,56 @@ export default function App() {
                         ]}
                       />
                     </View>
+                    {apartmentNumber.length > 0 &&
+                    !isValidApartmentNumber(apartmentNumber) ? (
+                      <Text style={locationStyles.validationText}>
+                        Use only letters, numbers, spaces, or hyphens.
+                      </Text>
+                    ) : null}
                   </View>
                 </View>
+                <View style={locationStyles.whatsAppField}>
+                  <Text style={styles.phoneCardLabel}>WHATSAPP NUMBER</Text>
+                  <View
+                    style={[
+                      locationStyles.locationInputShell,
+                      focusedLocationField === "whatsapp" && inputFocusStyle,
+                    ]}
+                  >
+                    <View style={locationStyles.phoneNumberRow}>
+                      <Text style={locationStyles.countryCode}>+91</Text>
+                      <TextInput
+                        value={whatsAppNumber}
+                        onChangeText={(value) => {
+                          setWhatsAppNumber(normalizeWhatsAppInput(value));
+                          setEligibilityError("");
+                        }}
+                        autoComplete="tel"
+                        keyboardType="phone-pad"
+                        maxLength={20}
+                        onFocus={() => setFocusedLocationField("whatsapp")}
+                        onBlur={() => setFocusedLocationField(null)}
+                        placeholder="9876543210"
+                        placeholderTextColor="#B68473"
+                        style={[
+                          styles.phoneInput,
+                          inputWebStyle,
+                          locationStyles.locationTextInput,
+                          locationStyles.phoneNumberInput,
+                        ]}
+                      />
+                    </View>
+                  </View>
+                  {whatsAppNumber.length > 0 &&
+                  !isValidWhatsAppNumber(whatsAppNumber) ? (
+                    <Text style={locationStyles.validationText}>
+                      Enter a valid 10-digit Indian mobile number.
+                    </Text>
+                  ) : null}
+                </View>
                 <Text style={styles.phoneHint}>
-                  We will check your Pujo donation status before booking.
+                  We will check your Pujo donation status before booking and
+                  send the confirmation on WhatsApp.
                 </Text>
                 {donationRecordMissing ? (
                   <View>
@@ -1053,12 +1223,17 @@ export default function App() {
                         <Text style={styles.phoneCardLabel}>YOUR NAME</Text>
                         <TextInput
                           value={donorName}
-                          onChangeText={setDonorName}
+                          onChangeText={(value) =>
+                            setDonorName(value.slice(0, DONOR_NAME_MAX_LENGTH))
+                          }
                           autoCapitalize="words"
                           autoCorrect={false}
-                          maxLength={80}
+                          maxLength={DONOR_NAME_MAX_LENGTH}
                           onFocus={() => setFocusedLocationField("name")}
-                          onBlur={() => setFocusedLocationField(null)}
+                          onBlur={() => {
+                            setDonorName(normalizeDonorName(donorName));
+                            setFocusedLocationField(null);
+                          }}
                           placeholder="Enter your name"
                           placeholderTextColor="#B68473"
                           style={[
@@ -1067,6 +1242,11 @@ export default function App() {
                             focusedLocationField === "name" && inputFocusStyle,
                           ]}
                         />
+                        {donorName.length > 0 && !isValidDonorName(donorName) ? (
+                          <Text style={locationStyles.validationText}>
+                            Start with a letter and use only name characters.
+                          </Text>
+                        ) : null}
                       </View>
                     ) : null}
                     {donationDeclined ? (
@@ -1304,7 +1484,7 @@ export default function App() {
                   <View style={styles.adminDayHeader}>
                     <View>
                       <Text style={styles.dayDate}>
-                        {day.dayDate || "No date"}
+                        {day.dayDate ? displayDayDate(day.dayDate) : "No date"}
                       </Text>
                       <Text style={styles.dayName}>{day.dayName}</Text>
                     </View>
@@ -2048,7 +2228,7 @@ export default function App() {
         {days.map((day) => (
           <View key={`${day.date}-${day.name}`} style={styles.dayCard}>
             <View style={styles.dayHeading}>
-              <Text style={styles.dayDate}>{day.date}</Text>
+              <Text style={styles.dayDate}>{displayDayDate(day.date)}</Text>
               <Text style={styles.dayName}>{day.name}</Text>
             </View>
             {day.meals.map((meal) => {
@@ -2202,6 +2382,21 @@ const locationStyles = StyleSheet.create({
   },
   towerPickerItem: { color: "#4B1815", fontFamily: displayFont, fontSize: 25 },
   apartmentField: { flex: 1.3 },
+  whatsAppField: { marginTop: 14 },
+  phoneNumberRow: { alignItems: "center", flexDirection: "row" },
+  countryCode: {
+    color: "#4B1815",
+    fontFamily: displayFont,
+    fontSize: 25,
+    marginRight: 8,
+  },
+  phoneNumberInput: { flex: 1 },
+  validationText: {
+    color: "#942F27",
+    fontSize: 11,
+    lineHeight: 16,
+    marginTop: 5,
+  },
 });
 const donationStyles = StyleSheet.create({
   choiceRow: { flexDirection: "row", flexWrap: "wrap", gap: 10, marginTop: 12 },
