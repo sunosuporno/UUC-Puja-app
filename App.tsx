@@ -143,6 +143,7 @@ type AdminSummary = {
     apartments: number;
   };
   days: AdminSummaryDay[];
+  dashboardOne?: DashboardOneData;
 };
 type AdminSummaryResponse = {
   ok?: boolean;
@@ -158,8 +159,12 @@ type DashboardMatrixColumn = {
 type DashboardMatrixRow = {
   key: string;
   eventName: string;
-  serviceType: ServiceType;
+  serviceType: string;
   values: Record<string, { quantity: number; amount: number }>;
+};
+type DashboardOneData = {
+  columns: DashboardMatrixColumn[];
+  rows: DashboardMatrixRow[];
 };
 
 const MAX_QUANTITY = 15;
@@ -237,64 +242,6 @@ const displayDayDate = (value: string) => {
   if (!month) return value;
 
   return `${Number(match[3])} ${month}`;
-};
-
-const buildDashboardOneData = (menuDays: Day[], summary: AdminSummary) => {
-  const eventNames: string[] = [];
-  const seenEvents = new Set<string>();
-  [...menuDays.map((day) => day.name), ...summary.days.map((day) => day.dayName)]
-    .filter(Boolean)
-    .forEach((eventName) => {
-      if (seenEvents.has(eventName)) return;
-      seenEvents.add(eventName);
-      eventNames.push(eventName);
-    });
-
-  const mealTypes = ["Breakfast", "Lunch", "Dinner"];
-  summary.days.forEach((day) => {
-    day.meals.forEach((meal) => {
-      if (meal.mealType && !mealTypes.includes(meal.mealType)) {
-        mealTypes.push(meal.mealType);
-      }
-    });
-  });
-
-  const columns: DashboardMatrixColumn[] = mealTypes.flatMap((mealType) =>
-    (["Veg", "Non-Veg"] as const).map((foodType) => ({
-      key: `${mealType}-${foodType}`,
-      mealType,
-      foodType,
-    }))
-  );
-  const rows: DashboardMatrixRow[] = eventNames.flatMap((eventName) =>
-    (["Dine-In", "Takeaway"] as const).map((serviceType) => {
-      const day = summary.days.find((candidate) => candidate.dayName === eventName);
-      const values: DashboardMatrixRow["values"] = {};
-      columns.forEach((column) => {
-        const matches = day?.meals.filter(
-          (meal) =>
-            meal.mealType === column.mealType &&
-            meal.foodType === column.foodType &&
-            meal.serviceType === serviceType
-        );
-        values[column.key] = {
-          quantity: (matches || []).reduce((sum, meal) => sum + meal.quantity, 0),
-          amount: (matches || []).reduce(
-            (sum, meal) => sum + meal.amountCollected,
-            0
-          ),
-        };
-      });
-      return {
-        key: `${eventName}-${serviceType}`,
-        eventName,
-        serviceType,
-        values,
-      };
-    })
-  );
-
-  return { columns, rows };
 };
 
 const isPastEventDate = (value: string, today = new Date()) => {
@@ -1651,9 +1598,11 @@ export default function App() {
           { label: "Individual", value: totals.individual },
         ]
       : [];
-    const dashboardOneData = adminSummary
-      ? buildDashboardOneData(days, adminSummary)
-      : { columns: [], rows: [] };
+    const dashboardOneData = adminSummary?.dashboardOne || { columns: [], rows: [] };
+    const hasDashboardOneData = dashboardOneData.columns.length > 0 && dashboardOneData.rows.length > 0;
+    const dashboardOneEventCount = new Set(
+      dashboardOneData.rows.map((row) => row.eventName)
+    ).size;
 
     return (
       <SafeAreaView style={styles.safeArea}>
@@ -1718,7 +1667,12 @@ export default function App() {
               No admin summary is loaded yet.
             </Text>
           ) : null}
-          {adminSummary && activeAdminDashboard === 1 ? (
+          {adminSummary && activeAdminDashboard === 1 && !hasDashboardOneData ? (
+            <Text style={styles.menuStateMessage}>
+              Dashboard sheet data is unavailable. Deploy the updated booking service and refresh.
+            </Text>
+          ) : null}
+          {adminSummary && activeAdminDashboard === 1 && hasDashboardOneData ? (
             <>
               <DashboardMatrix
                 title="Quantity"
@@ -1830,9 +1784,17 @@ export default function App() {
         </ScrollView>
         <View style={styles.summaryBar}>
           <View>
-            <Text style={styles.summaryLabel}>Coupon bookings only</Text>
+            <Text style={styles.summaryLabel}>
+              {activeAdminDashboard === 1
+                ? "Quantity and amount matrix"
+                : "Coupon bookings only"}
+            </Text>
             <Text style={styles.summaryTotal}>
-              {totals ? currency(totals.amountCollected) : currency(0)}
+              {activeAdminDashboard === 1
+                ? `${dashboardOneEventCount} events`
+                : totals
+                ? currency(totals.amountCollected)
+                : currency(0)}
             </Text>
           </View>
           <Pressable
@@ -3416,6 +3378,103 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: "800",
     marginTop: 10,
+  },
+  adminDashboardTabs: {
+    backgroundColor: "#F4E6D2",
+    borderRadius: 9,
+    flexDirection: "row",
+    gap: 4,
+    marginBottom: 20,
+    padding: 4,
+  },
+  adminDashboardTab: {
+    alignItems: "center",
+    borderRadius: 7,
+    flex: 1,
+    paddingHorizontal: 12,
+    paddingVertical: 11,
+  },
+  adminDashboardTabSelected: { backgroundColor: "#7C1D19" },
+  adminDashboardTabText: {
+    color: "#79584B",
+    fontSize: 13,
+    fontWeight: "900",
+  },
+  adminDashboardTabTextSelected: { color: "#FFF8EC" },
+  dashboardMatrixCard: {
+    backgroundColor: "#FFFFFF",
+    borderColor: "#EBDCC7",
+    borderRadius: 11,
+    borderWidth: 1,
+    marginBottom: 18,
+    overflow: "hidden",
+  },
+  dashboardMatrixTitle: {
+    backgroundColor: "#7C1D19",
+    color: "#FFF8EC",
+    fontFamily: displayFont,
+    fontSize: 23,
+    paddingHorizontal: 15,
+    paddingVertical: 13,
+  },
+  dashboardMatrixRow: {
+    alignItems: "stretch",
+    borderTopColor: "#EBDCC7",
+    borderTopWidth: 1,
+    flexDirection: "row",
+  },
+  dashboardMatrixHeader: {
+    backgroundColor: "#FFF3DF",
+    borderTopWidth: 0,
+  },
+  dashboardMatrixAlternateRow: { backgroundColor: "#FFFBF4" },
+  dashboardEventCell: {
+    paddingHorizontal: 10,
+    paddingVertical: 11,
+    width: 132,
+  },
+  dashboardServiceCell: {
+    borderLeftColor: "#EBDCC7",
+    borderLeftWidth: 1,
+    paddingHorizontal: 10,
+    paddingVertical: 11,
+    width: 102,
+  },
+  dashboardValueCell: {
+    borderLeftColor: "#EBDCC7",
+    borderLeftWidth: 1,
+    paddingHorizontal: 8,
+    paddingVertical: 11,
+    width: 110,
+  },
+  dashboardMatrixHeaderText: {
+    color: "#7C1D19",
+    fontSize: 11,
+    fontWeight: "900",
+    textAlign: "center",
+  },
+  dashboardMatrixSubheader: {
+    color: "#A36A15",
+    fontSize: 10,
+    fontWeight: "800",
+    marginTop: 3,
+    textAlign: "center",
+  },
+  dashboardMatrixEvent: {
+    color: "#5D211A",
+    fontSize: 13,
+    fontWeight: "900",
+  },
+  dashboardMatrixService: {
+    color: "#806B5A",
+    fontSize: 12,
+    fontWeight: "800",
+  },
+  dashboardMatrixValue: {
+    color: "#3F2A24",
+    fontSize: 12,
+    fontWeight: "800",
+    textAlign: "center",
   },
   adminMetricGrid: {
     flexDirection: "row",

@@ -1,6 +1,7 @@
 const BOOKINGS_SHEET_NAME = 'Bookings';
 const BOOKING_ITEMS_SHEET_NAME = 'Booking Items';
 const FOOD_MENU_SHEET_NAME = 'Food Menu';
+const DASHBOARD_SHEET_NAME = 'Dashboard';
 const DONATIONS_SHEET_NAME = 'Donations';
 const DONATION_TOWER_HEADERS = ['TWR', 'Tower', 'Tower No.', 'Tower No', 'Tower Number'];
 const DONATION_APARTMENT_HEADER = 'Apt. No.';
@@ -366,6 +367,7 @@ function getAdminSummary() {
   return {
     generatedAt: new Date().toISOString(),
     totals: summary.totals,
+    dashboardOne: getDashboardOneData(),
     days: summary.dayOrder.slice().sort((leftKey, rightKey) => compareAdminDays(summary.days[leftKey], summary.days[rightKey])).map((key) => {
       const day = summary.days[key];
       return {
@@ -382,6 +384,110 @@ function getAdminSummary() {
         meals: day.mealOrder.slice().sort((leftKey, rightKey) => compareAdminMeals(day.meals[leftKey], day.meals[rightKey])).map((mealKey) => day.meals[mealKey]),
       };
     }),
+  };
+}
+
+function getDashboardOneData() {
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(DASHBOARD_SHEET_NAME);
+  if (!sheet) throw new Error(`Could not find a tab named "${DASHBOARD_SHEET_NAME}".`);
+
+  const range = sheet.getDataRange();
+  const values = range.getValues();
+  const displayValues = range.getDisplayValues();
+  const quantitySection = parseDashboardSection(values, displayValues, 'Qty', 'quantity');
+  const amountSection = parseDashboardSection(values, displayValues, 'Amount', 'amount');
+  const columns = quantitySection.columns.length ? quantitySection.columns : amountSection.columns;
+  const rows = [];
+  const rowsByKey = {};
+
+  [quantitySection, amountSection].forEach((section) => {
+    const occurrences = {};
+    section.rows.forEach((sectionRow) => {
+      const baseKey = `${slugify(sectionRow.eventName)}|${slugify(sectionRow.serviceType)}`;
+      occurrences[baseKey] = (occurrences[baseKey] || 0) + 1;
+      const rowKey = `${baseKey}|${occurrences[baseKey]}`;
+
+      if (!rowsByKey[rowKey]) {
+        rowsByKey[rowKey] = {
+          key: rowKey,
+          eventName: sectionRow.eventName,
+          serviceType: sectionRow.serviceType,
+          values: {},
+        };
+        rows.push(rowsByKey[rowKey]);
+      }
+
+      section.columns.forEach((column, columnIndex) => {
+        if (!rowsByKey[rowKey].values[column.key]) {
+          rowsByKey[rowKey].values[column.key] = { quantity: 0, amount: 0 };
+        }
+        rowsByKey[rowKey].values[column.key][section.valueType] = sectionRow.values[columnIndex] || 0;
+      });
+    });
+  });
+
+  return { columns, rows };
+}
+
+function parseDashboardSection(values, displayValues, sectionLabel, valueType) {
+  let headerRowIndex = -1;
+  let labelColumnIndex = -1;
+
+  displayValues.some((row, rowIndex) => row.some((cell, columnIndex) => {
+    if (String(cell || '').trim().toLowerCase() !== sectionLabel.toLowerCase()) return false;
+    headerRowIndex = rowIndex;
+    labelColumnIndex = columnIndex;
+    return true;
+  }));
+
+  if (headerRowIndex < 0) return { valueType, columns: [], rows: [] };
+
+  const headerRow = displayValues[headerRowIndex] || [];
+  const subheaderRow = displayValues[headerRowIndex + 1] || [];
+  const eventColumnIndex = headerRow.findIndex((cell) => String(cell || '').trim().toLowerCase() === 'event');
+  const serviceColumnIndex = headerRow.findIndex((cell) => /dine-in\/takeaway/i.test(String(cell || '').trim()));
+  const firstValueColumnIndex = Math.max(labelColumnIndex + 3, serviceColumnIndex + 1);
+  const columns = [];
+  let mealType = '';
+
+  for (let columnIndex = firstValueColumnIndex; columnIndex < headerRow.length; columnIndex += 1) {
+    const headerValue = String(headerRow[columnIndex] || '').trim();
+    if (headerValue) mealType = headerValue;
+    const foodType = String(subheaderRow[columnIndex] || '').trim();
+    if (!mealType || !foodType) continue;
+    columns.push({
+      key: `${mealType}-${foodType}`,
+      mealType,
+      foodType,
+      columnIndex,
+    });
+  }
+
+  const rows = [];
+  for (let rowIndex = headerRowIndex + 2; rowIndex < displayValues.length; rowIndex += 1) {
+    const displayRow = displayValues[rowIndex] || [];
+    const eventName = String(displayRow[eventColumnIndex] || '').trim();
+    const serviceType = String(displayRow[serviceColumnIndex] || '').trim();
+    if (!eventName && !serviceType) break;
+    if (!eventName || !serviceType) continue;
+    rows.push({
+      eventName,
+      serviceType,
+      values: columns.map((column) => parseAmount(
+        values[rowIndex] ? values[rowIndex][column.columnIndex] : '',
+        displayRow[column.columnIndex],
+      )),
+    });
+  }
+
+  return {
+    valueType,
+    columns: columns.map((column) => ({
+      key: column.key,
+      mealType: column.mealType,
+      foodType: column.foodType,
+    })),
+    rows,
   };
 }
 
