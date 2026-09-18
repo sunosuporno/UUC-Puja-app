@@ -36,6 +36,8 @@
 8. Deploy it as a Web app. Choose `Execute as: Me`, set access to `Anyone`, and grant the app access to run the web app.
 9. Copy the deployed `/exec` URL. That is the URL the Expo app will use to create bookings and manage takeaway upgrades.
 
+The app's third admin dashboard uses the `getCollectionReport` action. It reads `Bookings` columns B:G, filters by the `Created At` date in the spreadsheet timezone, and returns the matching booking rows plus their total payable amount. Both ends of the selected date range are inclusive.
+
 The Sheet does not need to be shared publicly or made editable. The script is bound to the Sheet and runs with the deployer's permissions.
 
 For WhatsApp confirmations, set these Script Properties: `WHATSAPP_PHONE_NUMBER_ID`, `WHATSAPP_ACCESS_TOKEN`, `WHATSAPP_TEMPLATE_NAME`, and `WHATSAPP_TEMPLATE_LANGUAGE`. The manifest uses the `script.storage` scope so the script can read these properties. The booking sheet displays WhatsApp numbers with a leading `+`, but the Cloud API send request uses the required digits-only format internally.

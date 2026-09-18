@@ -154,6 +154,10 @@ function handlePayload(payload) {
     return jsonResponse({ ok: true, summary: getAdminSummary() });
   }
 
+  if (payload.action === 'getCollectionReport') {
+    return jsonResponse({ ok: true, report: getCollectionReport(payload) });
+  }
+
   if (payload.action === 'upgradeToTakeaway') {
     return jsonResponse({ ok: true, upgrade: upgradeToTakeaway(payload) });
   }
@@ -318,6 +322,85 @@ function getBookingsForApartment(payload) {
       };
     })
     .filter((booking) => booking !== null);
+}
+
+function getCollectionReport(payload) {
+  const fromDate = validateCollectionDate(payload.fromDate, 'From');
+  const toDate = validateCollectionDate(payload.toDate, 'To');
+  if (fromDate > toDate) throw new Error('The From date cannot be later than the To date.');
+
+  const spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = spreadsheet.getSheetByName(BOOKINGS_SHEET_NAME);
+  if (!sheet) throw new Error(`Could not find a tab named "${BOOKINGS_SHEET_NAME}".`);
+  assertHeaders(sheet);
+
+  const lastRow = sheet.getLastRow();
+  const report = {
+    generatedAt: new Date().toISOString(),
+    fromDate,
+    toDate,
+    totalCollection: 0,
+    bookings: [],
+  };
+  if (lastRow < 2) return report;
+
+  // Columns B:G contain the complete collection ledger required by this report.
+  const range = sheet.getRange(2, 2, lastRow - 1, 6);
+  const rows = range.getValues();
+  const displayRows = range.getDisplayValues();
+  const timeZone = spreadsheet.getSpreadsheetTimeZone() || Session.getScriptTimeZone() || 'Asia/Kolkata';
+
+  rows.forEach((row, index) => {
+    const displayRow = displayRows[index];
+    const createdDate = bookingCreatedDateKey(row[1], displayRow[1], timeZone);
+    if (!createdDate || createdDate < fromDate || createdDate > toDate) return;
+
+    const payableAmount = parseAmount(row[4], displayRow[4]);
+    report.totalCollection += payableAmount;
+    report.bookings.push({
+      bookingReference: String(displayRow[0] || '').trim(),
+      createdAt: String(displayRow[1] || '').trim(),
+      apartmentNumber: String(displayRow[2] || '').trim(),
+      paymentMethod: String(displayRow[3] || '').trim(),
+      payableAmount,
+      paymentReference: String(displayRow[5] || '').trim(),
+    });
+  });
+
+  return report;
+}
+
+function validateCollectionDate(value, label) {
+  const dateText = String(value || '').trim();
+  const match = dateText.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) throw new Error(`${label} date must use YYYY-MM-DD.`);
+
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const date = new Date(Date.UTC(year, month - 1, day));
+  if (
+    date.getUTCFullYear() !== year ||
+    date.getUTCMonth() !== month - 1 ||
+    date.getUTCDate() !== day
+  ) {
+    throw new Error(`${label} date is invalid.`);
+  }
+  return dateText;
+}
+
+function bookingCreatedDateKey(rawValue, displayValue, timeZone) {
+  if (Object.prototype.toString.call(rawValue) === '[object Date]' && !Number.isNaN(rawValue.getTime())) {
+    return Utilities.formatDate(rawValue, timeZone, 'yyyy-MM-dd');
+  }
+
+  const text = String(displayValue || rawValue || '').trim();
+  const isoMatch = text.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (isoMatch) return `${isoMatch[1]}-${isoMatch[2]}-${isoMatch[3]}`;
+
+  const localMatch = text.match(/^(\d{1,2})[\/-](\d{1,2})[\/-](\d{4})/);
+  if (!localMatch) return '';
+  return `${localMatch[3]}-${String(localMatch[2]).padStart(2, '0')}-${String(localMatch[1]).padStart(2, '0')}`;
 }
 
 function getBookingItemsForApartment(aptNo) {

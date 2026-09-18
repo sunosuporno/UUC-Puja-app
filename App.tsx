@@ -1,6 +1,6 @@
 import { StatusBar } from "expo-status-bar";
 import { useFonts } from "expo-font";
-import { useEffect, useRef, useState } from "react";
+import { createElement, useEffect, useRef, useState } from "react";
 import { Picker } from "@react-native-picker/picker";
 import QRCode from "react-native-qrcode-svg";
 import {
@@ -150,7 +150,7 @@ type AdminSummaryResponse = {
   summary?: AdminSummary;
   error?: string;
 };
-type AdminDashboardView = 1 | 2;
+type AdminDashboardView = 1 | 2 | 3;
 type DashboardMatrixColumn = {
   key: string;
   mealType: string;
@@ -165,6 +165,32 @@ type DashboardMatrixRow = {
 type DashboardOneData = {
   columns: DashboardMatrixColumn[];
   rows: DashboardMatrixRow[];
+};
+type CollectionBooking = {
+  bookingReference: string;
+  createdAt: string;
+  apartmentNumber: string;
+  paymentMethod: string;
+  payableAmount: number;
+  paymentReference: string;
+};
+type CollectionReport = {
+  generatedAt: string;
+  fromDate: string;
+  toDate: string;
+  totalCollection: number;
+  bookings: CollectionBooking[];
+};
+type CollectionReportResponse = {
+  ok?: boolean;
+  report?: CollectionReport;
+  error?: string;
+};
+
+const ADMIN_DASHBOARD_LABELS: Record<AdminDashboardView, string> = {
+  1: "Coupon Summary",
+  2: "Coupon Detail",
+  3: "Bookings",
 };
 
 const MAX_QUANTITY = 15;
@@ -244,6 +270,30 @@ const displayDayDate = (value: string) => {
   return `${Number(match[3])} ${month}`;
 };
 
+const displayFullDate = (value: string) => {
+  const match = value.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) return value;
+
+  const month = DISPLAY_MONTHS[Number(match[2]) - 1];
+  if (!month) return value;
+  return `${Number(match[3])} ${month} ${match[1]}`;
+};
+
+const dateInputValueInKolkata = (date = new Date()) => {
+  const parts = new Intl.DateTimeFormat("en-GB", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+    timeZone: "Asia/Kolkata",
+  }).formatToParts(date);
+  const values = Object.fromEntries(
+    parts.map((part) => [part.type, part.value])
+  );
+  return `${values.year}-${values.month}-${values.day}`;
+};
+
+const isValidDateInput = (value: string) => /^\d{4}-\d{2}-\d{2}$/.test(value);
+
 const isPastEventDate = (value: string, today = new Date()) => {
   const match = value.match(/^(\d{4})-(\d{2})-(\d{2})$/);
   if (!match) return false;
@@ -279,6 +329,7 @@ async function callBookingsApi<T>(payload: Record<string, unknown>): Promise<T> 
     "getFoodMenu",
     "getBookingsForApartment",
     "getAdminSummary",
+    "getCollectionReport",
   ].includes(action);
   const maxAttempts = isReadRequest ? 2 : 1;
 
@@ -421,6 +472,112 @@ function HeaderLogo() {
   );
 }
 
+function DatePickerField({
+  label,
+  value,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  return (
+    <View style={styles.collectionDateField}>
+      <Text style={styles.collectionDateLabel}>{label}</Text>
+      {Platform.OS === "web" ? (
+        createElement("input", {
+          "aria-label": label,
+          onChange: (event: { target: { value: string } }) =>
+            onChange(event.target.value),
+          style: {
+            backgroundColor: "#FFFDF8",
+            border: "1px solid #D8BE96",
+            borderRadius: 7,
+            boxSizing: "border-box",
+            color: "#5D211A",
+            fontFamily: "inherit",
+            fontSize: 15,
+            fontWeight: 700,
+            height: 46,
+            padding: "0 12px",
+            width: "100%",
+          },
+          type: "date",
+          value,
+        })
+      ) : (
+        <TextInput
+          accessibilityLabel={label}
+          maxLength={10}
+          onChangeText={onChange}
+          placeholder="YYYY-MM-DD"
+          style={styles.collectionNativeDateInput}
+          value={value}
+        />
+      )}
+    </View>
+  );
+}
+
+function CollectionBookingsTable({ rows }: { rows: CollectionBooking[] }) {
+  return (
+    <View style={styles.collectionTableCard}>
+      <ScrollView horizontal showsHorizontalScrollIndicator>
+        <View>
+          <View style={[styles.collectionTableRow, styles.collectionTableHeader]}>
+            <Text style={[styles.collectionTableHeaderText, styles.collectionReferenceCell]}>
+              Booking reference
+            </Text>
+            <Text style={[styles.collectionTableHeaderText, styles.collectionCreatedCell]}>
+              Created at
+            </Text>
+            <Text style={[styles.collectionTableHeaderText, styles.collectionApartmentCell]}>
+              Apartment
+            </Text>
+            <Text style={[styles.collectionTableHeaderText, styles.collectionPaymentCell]}>
+              Payment method
+            </Text>
+            <Text style={[styles.collectionTableHeaderText, styles.collectionAmountCell]}>
+              Amount
+            </Text>
+            <Text style={[styles.collectionTableHeaderText, styles.collectionTransactionCell]}>
+              Transaction / cheque number
+            </Text>
+          </View>
+          {rows.map((row, index) => (
+            <View
+              key={`${row.bookingReference}-${index}`}
+              style={[
+                styles.collectionTableRow,
+                index % 2 === 1 && styles.collectionTableAlternateRow,
+              ]}
+            >
+              <Text style={[styles.collectionTableStrongText, styles.collectionReferenceCell]}>
+                {row.bookingReference}
+              </Text>
+              <Text style={[styles.collectionTableText, styles.collectionCreatedCell]}>
+                {row.createdAt}
+              </Text>
+              <Text style={[styles.collectionTableText, styles.collectionApartmentCell]}>
+                {row.apartmentNumber}
+              </Text>
+              <Text style={[styles.collectionTableText, styles.collectionPaymentCell]}>
+                {row.paymentMethod}
+              </Text>
+              <Text style={[styles.collectionTableAmount, styles.collectionAmountCell]}>
+                {currency(row.payableAmount)}
+              </Text>
+              <Text style={[styles.collectionTableText, styles.collectionTransactionCell]}>
+                {row.paymentReference || "—"}
+              </Text>
+            </View>
+          ))}
+        </View>
+      </ScrollView>
+    </View>
+  );
+}
+
 function DashboardMatrix({
   title,
   columns,
@@ -519,6 +676,17 @@ export default function App() {
     useState<AdminDashboardView>(1);
   const [adminError, setAdminError] = useState("");
   const [isLoadingAdminSummary, setIsLoadingAdminSummary] = useState(false);
+  const [collectionFromDate, setCollectionFromDate] = useState(() =>
+    dateInputValueInKolkata()
+  );
+  const [collectionToDate, setCollectionToDate] = useState(() =>
+    dateInputValueInKolkata()
+  );
+  const [collectionReport, setCollectionReport] =
+    useState<CollectionReport | null>(null);
+  const [collectionError, setCollectionError] = useState("");
+  const [isLoadingCollectionReport, setIsLoadingCollectionReport] =
+    useState(false);
   const [days, setDays] = useState<Day[]>([]);
   const [seasonPassConfig, setSeasonPassConfig] =
     useState<SeasonPassConfig | null>(null);
@@ -884,6 +1052,52 @@ export default function App() {
     }
   };
 
+  const loadCollectionReport = async () => {
+    if (!BOOKINGS_API_URL) {
+      setCollectionError(
+        "Booking service is not configured yet. Please try again later."
+      );
+      return;
+    }
+    if (
+      !isValidDateInput(collectionFromDate) ||
+      !isValidDateInput(collectionToDate)
+    ) {
+      setCollectionError("Choose a valid From and To date.");
+      return;
+    }
+    if (collectionFromDate > collectionToDate) {
+      setCollectionError("The From date cannot be later than the To date.");
+      return;
+    }
+
+    setCollectionError("");
+    setCollectionReport(null);
+    setIsLoadingCollectionReport(true);
+
+    try {
+      const result = await callBookingsApi<CollectionReportResponse>({
+        action: "getCollectionReport",
+        fromDate: collectionFromDate,
+        toDate: collectionToDate,
+      });
+
+      if (!result.ok || !result.report) {
+        throw new Error(result.error || "Unable to load collection report.");
+      }
+
+      setCollectionReport(result.report);
+    } catch (error) {
+      setCollectionError(
+        error instanceof Error
+          ? error.message
+          : "Unable to load collection report."
+      );
+    } finally {
+      setIsLoadingCollectionReport(false);
+    }
+  };
+
   const changeUpgradeQuantity = (
     itemId: string,
     nextQuantity: number,
@@ -1071,6 +1285,12 @@ export default function App() {
     setAdminSummary(null);
     setAdminError("");
     setIsLoadingAdminSummary(false);
+    const today = dateInputValueInKolkata();
+    setCollectionFromDate(today);
+    setCollectionToDate(today);
+    setCollectionReport(null);
+    setCollectionError("");
+    setIsLoadingCollectionReport(false);
     setSeasonPasses(0);
     setQuantities({});
     setCashAmount("");
@@ -1571,8 +1791,12 @@ export default function App() {
 
   if (screen === "admin") {
     const totals = adminSummary?.totals;
-    const updatedAt = adminSummary?.generatedAt
-      ? new Date(adminSummary.generatedAt).toLocaleString("en-IN", {
+    const activeGeneratedAt =
+      activeAdminDashboard === 3
+        ? collectionReport?.generatedAt
+        : adminSummary?.generatedAt;
+    const updatedAt = activeGeneratedAt
+      ? new Date(activeGeneratedAt).toLocaleString("en-IN", {
           dateStyle: "medium",
           timeStyle: "short",
         })
@@ -1622,12 +1846,21 @@ export default function App() {
           showsVerticalScrollIndicator={false}
         >
           <View style={styles.adminDashboardTabs}>
-            {([1, 2] as const).map((dashboardNumber) => {
+            {([1, 2, 3] as const).map((dashboardNumber) => {
               const selected = activeAdminDashboard === dashboardNumber;
               return (
                 <Pressable
                   key={dashboardNumber}
-                  onPress={() => setActiveAdminDashboard(dashboardNumber)}
+                  onPress={() => {
+                    setActiveAdminDashboard(dashboardNumber);
+                    if (
+                      dashboardNumber === 3 &&
+                      !collectionReport &&
+                      !isLoadingCollectionReport
+                    ) {
+                      void loadCollectionReport();
+                    }
+                  }}
                   style={({ pressed }) => [
                     styles.adminDashboardTab,
                     selected && styles.adminDashboardTabSelected,
@@ -1640,7 +1873,7 @@ export default function App() {
                       selected && styles.adminDashboardTabTextSelected,
                     ]}
                   >
-                    Dashboard {dashboardNumber}
+                    {ADMIN_DASHBOARD_LABELS[dashboardNumber]}
                   </Text>
                 </Pressable>
               );
@@ -1648,21 +1881,26 @@ export default function App() {
           </View>
           <View style={styles.introBlock}>
             <Text style={styles.introTitle}>
-              Dashboard {activeAdminDashboard}
+              {ADMIN_DASHBOARD_LABELS[activeAdminDashboard]}
             </Text>
             <Text style={styles.introBody}>
               {activeAdminDashboard === 1
                 ? "Quantity and amount matrix by event, service, meal, and food type."
-                : "Detailed coupon totals and day-wise meal breakdown."}
+                : activeAdminDashboard === 2
+                ? "Detailed coupon totals and day-wise meal breakdown."
+                : "Total collection and booking records for an inclusive date range."}
             </Text>
             {updatedAt ? (
               <Text style={styles.adminTimestamp}>Updated {updatedAt}</Text>
             ) : null}
           </View>
-          {adminError ? (
+          {adminError && activeAdminDashboard !== 3 ? (
             <Text style={styles.submissionError}>{adminError}</Text>
           ) : null}
-          {!adminSummary ? (
+          {collectionError && activeAdminDashboard === 3 ? (
+            <Text style={styles.submissionError}>{collectionError}</Text>
+          ) : null}
+          {!adminSummary && activeAdminDashboard !== 3 ? (
             <Text style={styles.menuStateMessage}>
               No admin summary is loaded yet.
             </Text>
@@ -1781,33 +2019,127 @@ export default function App() {
               ))}
             </>
           ) : null}
+          {activeAdminDashboard === 3 ? (
+            <>
+              <View style={styles.collectionFilterCard}>
+                <View style={styles.collectionDateFields}>
+                  <DatePickerField
+                    label="From date"
+                    onChange={setCollectionFromDate}
+                    value={collectionFromDate}
+                  />
+                  <DatePickerField
+                    label="To date"
+                    onChange={setCollectionToDate}
+                    value={collectionToDate}
+                  />
+                </View>
+                <Pressable
+                  disabled={isLoadingCollectionReport}
+                  onPress={() => void loadCollectionReport()}
+                  style={({ pressed }) => [
+                    styles.collectionApplyButton,
+                    isLoadingCollectionReport && styles.paymentNextDisabled,
+                    pressed && !isLoadingCollectionReport && styles.pressed,
+                  ]}
+                >
+                  <Text style={styles.collectionApplyButtonText}>
+                    {isLoadingCollectionReport ? "Loading..." : "Apply date range"}
+                  </Text>
+                </Pressable>
+              </View>
+              {collectionReport ? (
+                <>
+                  <View style={styles.adminMetricGrid}>
+                    <View style={styles.adminMetricCard}>
+                      <Text style={styles.adminMetricLabel}>Total collection</Text>
+                      <Text style={styles.adminMetricValue}>
+                        {currency(collectionReport.totalCollection)}
+                      </Text>
+                    </View>
+                    <View style={styles.collectionCountCard}>
+                      <Text style={styles.collectionCountValue}>
+                        {collectionReport.bookings.length}
+                      </Text>
+                      <Text style={styles.collectionCountLabel}>
+                        {collectionReport.bookings.length === 1
+                          ? "Booking"
+                          : "Bookings"}
+                      </Text>
+                    </View>
+                  </View>
+                  <View style={styles.sectionHeading}>
+                    <Text style={styles.sectionTitle}>Collection records</Text>
+                    <Text style={styles.sectionCaption}>
+                      {displayFullDate(collectionReport.fromDate)} to {displayFullDate(collectionReport.toDate)}
+                    </Text>
+                  </View>
+                  {collectionReport.bookings.length > 0 ? (
+                    <CollectionBookingsTable rows={collectionReport.bookings} />
+                  ) : (
+                    <Text style={styles.menuStateMessage}>
+                      No bookings were created in this date range.
+                    </Text>
+                  )}
+                </>
+              ) : !isLoadingCollectionReport ? (
+                <Text style={styles.menuStateMessage}>
+                  Choose a date range to load collection records.
+                </Text>
+              ) : null}
+            </>
+          ) : null}
         </ScrollView>
         <View style={styles.summaryBar}>
           <View>
             <Text style={styles.summaryLabel}>
               {activeAdminDashboard === 1
                 ? "Quantity and amount matrix"
-                : "Coupon bookings only"}
+                : activeAdminDashboard === 2
+                ? "Coupon bookings only"
+                : collectionReport
+                ? `${displayFullDate(collectionReport.fromDate)} to ${displayFullDate(collectionReport.toDate)}`
+                : "Selected date range"}
             </Text>
             <Text style={styles.summaryTotal}>
               {activeAdminDashboard === 1
                 ? `${dashboardOneEventCount} events`
-                : totals
+                : activeAdminDashboard === 2 && totals
                 ? currency(totals.amountCollected)
+                : activeAdminDashboard === 3 && collectionReport
+                ? currency(collectionReport.totalCollection)
                 : currency(0)}
             </Text>
           </View>
           <Pressable
-            disabled={isLoadingAdminSummary}
-            onPress={() => void loadAdminSummary()}
+            disabled={
+              activeAdminDashboard === 3
+                ? isLoadingCollectionReport
+                : isLoadingAdminSummary
+            }
+            onPress={() =>
+              activeAdminDashboard === 3
+                ? void loadCollectionReport()
+                : void loadAdminSummary()
+            }
             style={({ pressed }) => [
               styles.paymentNext,
-              isLoadingAdminSummary && styles.paymentNextDisabled,
-              pressed && !isLoadingAdminSummary && styles.pressed,
+              (activeAdminDashboard === 3
+                ? isLoadingCollectionReport
+                : isLoadingAdminSummary) && styles.paymentNextDisabled,
+              pressed &&
+                !(activeAdminDashboard === 3
+                  ? isLoadingCollectionReport
+                  : isLoadingAdminSummary) &&
+                styles.pressed,
             ]}
           >
             <Text style={styles.paymentNextText}>
-              {isLoadingAdminSummary ? "Refreshing..." : "Refresh"}
+              {(activeAdminDashboard === 3
+                ? isLoadingCollectionReport
+                : isLoadingAdminSummary)
+                ? "Refreshing..."
+                : "Refresh"}
             </Text>
             <Text style={styles.continueArrow}>↻</Text>
           </Pressable>
@@ -3401,6 +3733,134 @@ const styles = StyleSheet.create({
     fontWeight: "900",
   },
   adminDashboardTabTextSelected: { color: "#FFF8EC" },
+  collectionFilterCard: {
+    alignItems: "flex-end",
+    backgroundColor: "#FFF3DF",
+    borderColor: "#E5CDA6",
+    borderRadius: 11,
+    borderWidth: 1,
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 12,
+    marginBottom: 18,
+    padding: 15,
+  },
+  collectionDateFields: {
+    flex: 1,
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 12,
+    minWidth: 260,
+  },
+  collectionDateField: { flex: 1, minWidth: 190 },
+  collectionDateLabel: {
+    color: "#7C1D19",
+    fontSize: 10,
+    fontWeight: "900",
+    letterSpacing: 1.1,
+    marginBottom: 7,
+    textTransform: "uppercase",
+  },
+  collectionNativeDateInput: {
+    backgroundColor: "#FFFDF8",
+    borderColor: "#D8BE96",
+    borderRadius: 7,
+    borderWidth: 1,
+    color: "#5D211A",
+    fontSize: 15,
+    fontWeight: "700",
+    height: 46,
+    paddingHorizontal: 12,
+  },
+  collectionApplyButton: {
+    alignItems: "center",
+    backgroundColor: "#7C1D19",
+    borderRadius: 7,
+    height: 46,
+    justifyContent: "center",
+    paddingHorizontal: 18,
+  },
+  collectionApplyButtonText: {
+    color: "#FFF8EC",
+    fontSize: 13,
+    fontWeight: "900",
+  },
+  collectionCountCard: {
+    backgroundColor: "#F4C05B",
+    borderRadius: 11,
+    flex: 1,
+    minWidth: 180,
+    padding: 16,
+  },
+  collectionCountValue: {
+    color: "#541715",
+    fontFamily: displayFont,
+    fontSize: 28,
+  },
+  collectionCountLabel: {
+    color: "#70441A",
+    fontSize: 10,
+    fontWeight: "900",
+    letterSpacing: 1.2,
+    marginTop: 8,
+    textTransform: "uppercase",
+  },
+  collectionTableCard: {
+    backgroundColor: "#FFFFFF",
+    borderColor: "#EBDCC7",
+    borderRadius: 11,
+    borderWidth: 1,
+    marginBottom: 18,
+    overflow: "hidden",
+  },
+  collectionTableRow: {
+    alignItems: "stretch",
+    borderTopColor: "#EBDCC7",
+    borderTopWidth: 1,
+    flexDirection: "row",
+  },
+  collectionTableHeader: {
+    backgroundColor: "#7C1D19",
+    borderTopWidth: 0,
+  },
+  collectionTableAlternateRow: { backgroundColor: "#FFFBF4" },
+  collectionTableHeaderText: {
+    color: "#FFF8EC",
+    fontSize: 10,
+    fontWeight: "900",
+    letterSpacing: 0.5,
+    paddingHorizontal: 11,
+    paddingVertical: 13,
+    textTransform: "uppercase",
+  },
+  collectionTableText: {
+    color: "#6F5A4D",
+    fontSize: 12,
+    fontWeight: "700",
+    paddingHorizontal: 11,
+    paddingVertical: 13,
+  },
+  collectionTableStrongText: {
+    color: "#5D211A",
+    fontSize: 12,
+    fontWeight: "900",
+    paddingHorizontal: 11,
+    paddingVertical: 13,
+  },
+  collectionTableAmount: {
+    color: "#7C1D19",
+    fontSize: 12,
+    fontWeight: "900",
+    paddingHorizontal: 11,
+    paddingVertical: 13,
+    textAlign: "right",
+  },
+  collectionReferenceCell: { width: 170 },
+  collectionCreatedCell: { width: 170 },
+  collectionApartmentCell: { width: 100 },
+  collectionPaymentCell: { width: 130 },
+  collectionAmountCell: { width: 120 },
+  collectionTransactionCell: { width: 220 },
   dashboardMatrixCard: {
     backgroundColor: "#FFFFFF",
     borderColor: "#EBDCC7",
