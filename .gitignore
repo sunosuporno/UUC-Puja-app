@@ -42,3 +42,7 @@ yarn-error.*
 
 
 codegs.md
+# Local database and private spreadsheet snapshots
+backend/data/
+backend/.postgres/
+backend/.pgsocket/
