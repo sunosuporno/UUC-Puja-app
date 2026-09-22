@@ -4,25 +4,27 @@
     "slug": "uuc-pujo-coupons",
     "version": "1.0.0",
     "orientation": "default",
-    "icon": "./assets/icon.png",
+    "icon": "./assets/udita-app-icon.png",
     "userInterfaceStyle": "light",
     "ios": {
       "supportsTablet": true
     },
     "android": {
       "adaptiveIcon": {
-        "backgroundColor": "#E6F4FE",
-        "foregroundImage": "./assets/android-icon-foreground.png",
-        "backgroundImage": "./assets/android-icon-background.png",
-        "monochromeImage": "./assets/android-icon-monochrome.png"
+        "backgroundColor": "#FFFFFF",
+        "foregroundImage": "./assets/udita-android-foreground.png"
       },
+      "package": "com.udita.pujocoupons",
       "predictiveBackGestureEnabled": false
     },
     "web": {
       "favicon": "./assets/favicon-udita.png"
     },
-    "plugins": [
-      "expo-font"
-    ]
+    "plugins": ["expo-font"],
+    "extra": {
+      "eas": {
+        "projectId": "34dd1612-0e6a-4c6e-b418-2346326b79bf"
+      }
+    }
   }
 }

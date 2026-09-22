@@ -291,6 +291,10 @@ function validateSeasonPassBookingItem(item, seasonPassConfig) {
 function getBookingsForApartment(payload) {
   const towerNumber = validateTowerNumber(payload.towerNumber);
   const apartmentNumber = validateApartmentNumber(payload.apartmentNumber);
+  const requestedBookingReference = String(payload.bookingReference || '').trim();
+  if (requestedBookingReference && !/^[A-Za-z0-9_-]{1,80}$/.test(requestedBookingReference)) {
+    throw new Error('The booking reference is invalid.');
+  }
   const aptNo = formatAptNo(towerNumber, apartmentNumber);
   const bookingSheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(BOOKINGS_SHEET_NAME);
   if (!bookingSheet) throw new Error(`Could not find a tab named "${BOOKINGS_SHEET_NAME}".`);
@@ -321,7 +325,7 @@ function getBookingsForApartment(payload) {
         items: itemsByReference[bookingReference] || [],
       };
     })
-    .filter((booking) => booking !== null);
+    .filter((booking) => booking !== null && (!requestedBookingReference || booking.bookingReference === requestedBookingReference));
 }
 
 function getCollectionReport(payload) {
@@ -765,11 +769,15 @@ function buildManagedBookingItem(row, displayRow, rowNumber, priceMap) {
 function upgradeToTakeaway(payload) {
   const towerNumber = validateTowerNumber(payload.towerNumber);
   const apartmentNumber = validateApartmentNumber(payload.apartmentNumber);
+  const requestedBookingReference = String(payload.bookingReference || '').trim();
+  if (requestedBookingReference && !/^[A-Za-z0-9_-]{1,80}$/.test(requestedBookingReference)) {
+    throw new Error('The booking reference is invalid.');
+  }
   const aptNo = formatAptNo(towerNumber, apartmentNumber);
   const itemUpgrades = validateManagedItemUpgrades(payload.itemUpgrades, payload.itemIds);
   const payment = validateUpgradePayment(payload);
   const requestId = validateUpgradeRequestId(payload.upgradeRequestId);
-  const requestFingerprint = buildUpgradeRequestFingerprint(aptNo, itemUpgrades, payment);
+  const requestFingerprint = buildUpgradeRequestFingerprint(aptNo, itemUpgrades, payment, requestedBookingReference);
   const lock = LockService.getScriptLock();
   lock.waitLock(30000);
 
@@ -803,6 +811,9 @@ function upgradeToTakeaway(payload) {
         sourceRow: rows[rowNumber - 1].slice(0, BOOKING_ITEM_HEADERS.length),
       };
     });
+    if (requestedBookingReference && selectedItems.some((item) => item.bookingReference !== requestedBookingReference)) {
+      throw new Error('Selected items must belong to the booking being edited.');
+    }
     const expectedPayableAmount = selectedItems.reduce((sum, item) => sum + item.extraTotal, 0);
     if (Math.abs(expectedPayableAmount - payment.payableAmount) > 0.01) {
       throw new Error('The selected upgrades do not match the payable amount.');
@@ -873,12 +884,13 @@ function validateUpgradeRequestId(value) {
   return requestId;
 }
 
-function buildUpgradeRequestFingerprint(aptNo, itemUpgrades, payment) {
+function buildUpgradeRequestFingerprint(aptNo, itemUpgrades, payment, bookingReference) {
   return JSON.stringify({
     aptNo: normalizeAptNo(aptNo),
     itemUpgrades,
     paymentMethod: payment.paymentMethod,
     payableAmount: payment.payableAmount,
+    ...(bookingReference ? { bookingReference } : {}),
   });
 }
 

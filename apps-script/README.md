@@ -37,6 +37,7 @@
 9. Copy the deployed `/exec` URL. That is the URL the Expo app will use to create bookings and manage takeaway upgrades.
 
 The app's third admin dashboard uses the `getCollectionReport` action. It reads `Bookings` columns B:G, filters by the `Created At` date in the spreadsheet timezone, and returns the matching booking rows plus their total payable amount. Both ends of the selected date range are inclusive.
+Its booking references open the existing takeaway-upgrade flow for only that reference. `getBookingsForApartment` accepts an optional `bookingReference` filter, and `upgradeToTakeaway` rejects items from other references when that filter is supplied. The home-screen apartment view still shows all bookings for the apartment.
 
 The Sheet does not need to be shared publicly or made editable. The script is bound to the Sheet and runs with the deployer's permissions.
 

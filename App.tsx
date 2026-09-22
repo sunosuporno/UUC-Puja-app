@@ -1,3 +1,7 @@
+import { callBookingsApi, hasAdminToken } from "./src/api";
+import { AdminAccess } from "./components/AdminAccess";
+import { ApartmentCoupons } from "./components/ApartmentCoupons";
+import { MenuAdmin } from "./components/MenuAdmin";
 import { StatusBar } from "expo-status-bar";
 import { useFonts } from "expo-font";
 import { createElement, useEffect, useRef, useState } from "react";
@@ -42,6 +46,8 @@ type Screen =
   | "booking"
   | "manage"
   | "admin"
+  | "admin-login"
+  | "admin-menu"
   | "payment"
   | "cash"
   | "cheque"
@@ -49,7 +55,7 @@ type Screen =
   | "success";
 type PaymentMethod = "cash" | "cheque" | "upi";
 type ServiceType = "Dine-In" | "Takeaway";
-type PaymentPurpose = "booking" | "upgrade";
+type PaymentPurpose = "booking" | "upgrade" | "donation";
 type MealQuantities = {
   dineIn: number;
   takeaway: number;
@@ -87,7 +93,6 @@ type DonationCheckResponse = {
 };
 type ManagedBookingItem = {
   id: string;
-  rowNumber: number;
   bookingReference: string;
   dayName: string;
   dayDate: string;
@@ -143,29 +148,13 @@ type AdminSummary = {
     apartments: number;
   };
   days: AdminSummaryDay[];
-  dashboardOne?: DashboardOneData;
 };
 type AdminSummaryResponse = {
   ok?: boolean;
   summary?: AdminSummary;
   error?: string;
 };
-type AdminDashboardView = 1 | 2 | 3;
-type DashboardMatrixColumn = {
-  key: string;
-  mealType: string;
-  foodType: "Veg" | "Non-Veg";
-};
-type DashboardMatrixRow = {
-  key: string;
-  eventName: string;
-  serviceType: string;
-  values: Record<string, { quantity: number; amount: number }>;
-};
-type DashboardOneData = {
-  columns: DashboardMatrixColumn[];
-  rows: DashboardMatrixRow[];
-};
+type AdminDashboardView = 2 | 3 | 4;
 type CollectionBooking = {
   bookingReference: string;
   createdAt: string;
@@ -188,9 +177,9 @@ type CollectionReportResponse = {
 };
 
 const ADMIN_DASHBOARD_LABELS: Record<AdminDashboardView, string> = {
-  1: "Coupon Summary",
   2: "Coupon Detail",
   3: "Bookings",
+  4: "Apartment coupons",
 };
 
 const MAX_QUANTITY = 15;
@@ -201,7 +190,7 @@ const TOWER_OPTIONS = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "TH"];
 const DEFAULT_SEASON_PASS_CONFIG: SeasonPassConfig = {
   price: 1450,
   mealType: "Lunch",
-  includedDays: ["Saptami 1", "Saptami 2", "Ashtami", "Nabami"],
+  includedDays: ["Saptami 1", "Saptami 2", "Nabami"],
   description: "",
 };
 const UPI_ID = "boim-405733112614@boi";
@@ -217,13 +206,13 @@ const createClientRequestId = (prefix: "booking" | "upgrade") =>
     .toString(36)
     .slice(2, 12)}`;
 const phoneDigits = (value: string) => value.replace(/\D/g, "");
-const normalizeWhatsAppInput = (value: string) => {
+const normalizePhoneInput = (value: string) => {
   let digits = phoneDigits(value);
   if (digits.length === 12 && digits.startsWith("91")) digits = digits.slice(2);
   if (digits.length === 11 && digits.startsWith("0")) digits = digits.slice(1);
   return digits.slice(0, 10);
 };
-const isValidWhatsAppNumber = (value: string) => {
+const isValidPhoneNumber = (value: string) => {
   const digits = phoneDigits(value);
   return /^[6-9]\d{9}$/.test(digits);
 };
@@ -317,83 +306,6 @@ const isPastEventDate = (value: string, today = new Date()) => {
   );
   return eventDate.getTime() < currentDate.getTime();
 };
-
-async function callBookingsApi<T>(payload: Record<string, unknown>): Promise<T> {
-  if (!BOOKINGS_API_URL) {
-    throw new Error("Booking service is not configured yet. Please try again later.");
-  }
-
-  const action = typeof payload.action === "string" ? payload.action : "";
-  const isReadRequest = [
-    "checkDonation",
-    "getFoodMenu",
-    "getBookingsForApartment",
-    "getAdminSummary",
-    "getCollectionReport",
-  ].includes(action);
-  const maxAttempts = isReadRequest ? 2 : 1;
-
-  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
-    const requestOptions: RequestInit = isReadRequest
-      ? {
-          redirect: "follow",
-          cache: "no-store",
-          headers: { Accept: "application/json" },
-        }
-      : {
-          method: "POST",
-          redirect: "follow",
-          cache: "no-store",
-          headers: {
-            Accept: "application/json",
-            "Content-Type": "text/plain;charset=utf-8",
-          },
-          body: JSON.stringify(payload),
-        };
-    const requestUrl = isReadRequest
-      ? `${BOOKINGS_API_URL}${
-          BOOKINGS_API_URL.includes("?") ? "&" : "?"
-        }${new URLSearchParams({
-          payload: JSON.stringify(payload),
-          _: `${Date.now()}-${attempt}-${Math.random().toString(36).slice(2)}`,
-        }).toString()}`
-      : BOOKINGS_API_URL;
-
-    let response: Response;
-    try {
-      response = await fetch(requestUrl, requestOptions);
-    } catch (error) {
-      if (isReadRequest && attempt + 1 < maxAttempts) continue;
-      throw error;
-    }
-
-    const trimmedText = (await response.text()).trim();
-    try {
-      const result = JSON.parse(trimmedText) as T;
-      if (!response.ok) {
-        const message =
-          typeof result === "object" &&
-          result !== null &&
-          "error" in result &&
-          typeof result.error === "string"
-            ? result.error
-            : "Booking service returned an error.";
-        throw new Error(message);
-      }
-      return result;
-    } catch (error) {
-      if (!(error instanceof SyntaxError)) throw error;
-      if (isReadRequest && attempt + 1 < maxAttempts) continue;
-      throw new Error(
-        isReadRequest
-          ? "The booking service was temporarily unavailable. Please try again."
-          : "The booking may have been received, but confirmation could not be loaded. Check Manage Bookings before trying again."
-      );
-    }
-  }
-
-  throw new Error("The booking service was temporarily unavailable. Please try again.");
-}
 
 function normalizeSeasonPassConfig(
   value: SeasonPassConfig | null | undefined
@@ -519,7 +431,15 @@ function DatePickerField({
   );
 }
 
-function CollectionBookingsTable({ rows }: { rows: CollectionBooking[] }) {
+function CollectionBookingsTable({
+  rows,
+  onOpenBooking,
+  openingReference,
+}: {
+  rows: CollectionBooking[];
+  onOpenBooking: (booking: CollectionBooking) => void;
+  openingReference: string;
+}) {
   return (
     <View style={styles.collectionTableCard}>
       <ScrollView horizontal showsHorizontalScrollIndicator>
@@ -552,9 +472,22 @@ function CollectionBookingsTable({ rows }: { rows: CollectionBooking[] }) {
                 index % 2 === 1 && styles.collectionTableAlternateRow,
               ]}
             >
-              <Text style={[styles.collectionTableStrongText, styles.collectionReferenceCell]}>
-                {row.bookingReference}
-              </Text>
+              <Pressable
+                accessibilityLabel={`Manage booking ${row.bookingReference}`}
+                accessibilityRole="link"
+                disabled={Boolean(openingReference)}
+                onPress={() => onOpenBooking(row)}
+                style={({ pressed }) => [
+                  styles.collectionReferenceCell,
+                  pressed && styles.pressed,
+                ]}
+              >
+                <Text style={styles.collectionBookingLink}>
+                  {openingReference === row.bookingReference
+                    ? "Opening..."
+                    : row.bookingReference}
+                </Text>
+              </Pressable>
               <Text style={[styles.collectionTableText, styles.collectionCreatedCell]}>
                 {row.createdAt}
               </Text>
@@ -578,66 +511,6 @@ function CollectionBookingsTable({ rows }: { rows: CollectionBooking[] }) {
   );
 }
 
-function DashboardMatrix({
-  title,
-  columns,
-  rows,
-  valueType,
-}: {
-  title: string;
-  columns: DashboardMatrixColumn[];
-  rows: DashboardMatrixRow[];
-  valueType: "quantity" | "amount";
-}) {
-  return (
-    <View style={styles.dashboardMatrixCard}>
-      <Text style={styles.dashboardMatrixTitle}>{title}</Text>
-      <ScrollView horizontal showsHorizontalScrollIndicator>
-        <View>
-          <View style={[styles.dashboardMatrixRow, styles.dashboardMatrixHeader]}>
-            <Text style={[styles.dashboardMatrixHeaderText, styles.dashboardEventCell]}>
-              Event
-            </Text>
-            <Text style={[styles.dashboardMatrixHeaderText, styles.dashboardServiceCell]}>
-              Service
-            </Text>
-            {columns.map((column) => (
-              <View key={column.key} style={styles.dashboardValueCell}>
-                <Text style={styles.dashboardMatrixHeaderText}>{column.mealType}</Text>
-                <Text style={styles.dashboardMatrixSubheader}>{column.foodType}</Text>
-              </View>
-            ))}
-          </View>
-          {rows.map((row, index) => (
-            <View
-              key={row.key}
-              style={[
-                styles.dashboardMatrixRow,
-                index % 2 === 1 && styles.dashboardMatrixAlternateRow,
-              ]}
-            >
-              <Text style={[styles.dashboardMatrixEvent, styles.dashboardEventCell]}>
-                {row.eventName}
-              </Text>
-              <Text style={[styles.dashboardMatrixService, styles.dashboardServiceCell]}>
-                {row.serviceType}
-              </Text>
-              {columns.map((column) => {
-                const value = row.values[column.key]?.[valueType] || 0;
-                return (
-                  <Text key={column.key} style={[styles.dashboardMatrixValue, styles.dashboardValueCell]}>
-                    {valueType === "amount" ? currency(value) : value}
-                  </Text>
-                );
-              })}
-            </View>
-          ))}
-        </View>
-      </ScrollView>
-    </View>
-  );
-}
-
 export default function App() {
   const [homeFontsLoaded] = useFonts({
     Avigea: require("./assets/fonts/Avigea.otf"),
@@ -650,30 +523,46 @@ export default function App() {
   const submissionInFlightRef = useRef(false);
   const bookingRequestIdRef = useRef("");
   const upgradeRequestIdRef = useRef("");
-  const [screen, setScreen] = useState<Screen>("phone");
+  const [screen, setScreen] = useState<Screen>(() => Platform.OS === "web" && typeof window !== "undefined" && window.location.pathname.startsWith("/admin") ? "admin-login" : "phone");
+  useEffect(() => {
+    if (Platform.OS !== "web" || typeof window === "undefined") return;
+    const path = screen === "admin" || screen === "admin-login" || screen === "admin-menu"
+      ? "/admin"
+      : "/";
+    if (window.location.pathname !== path) {
+      window.history.replaceState(
+        window.history.state,
+        "",
+        path + window.location.search + window.location.hash,
+      );
+    }
+  }, [screen]);
   const [towerNumber, setTowerNumber] = useState("");
   const [apartmentNumber, setApartmentNumber] = useState("");
-  const [whatsAppNumber, setWhatsAppNumber] = useState("");
+  const [phoneNumber, setPhoneNumber] = useState("");
   const [focusedLocationField, setFocusedLocationField] = useState<
-    "tower" | "apartment" | "whatsapp" | "name" | null
+    "tower" | "apartment" | "phone" | "name" | null
   >(null);
   const [donationRecordMissing, setDonationRecordMissing] = useState(false);
   const [donationSelected, setDonationSelected] = useState(false);
   const [donationDeclined, setDonationDeclined] = useState(false);
   const [donorName, setDonorName] = useState("");
+  const [donationReceiptNumber, setDonationReceiptNumber] = useState("");
   const [eligibilityError, setEligibilityError] = useState("");
   const [isCheckingEligibility, setIsCheckingEligibility] = useState(false);
   const [manageError, setManageError] = useState("");
   const [isLoadingManagedBookings, setIsLoadingManagedBookings] =
     useState(false);
   const [managedBookings, setManagedBookings] = useState<ManagedBooking[]>([]);
+  const [managedBookingReference, setManagedBookingReference] = useState("");
+  const [openingBookingReference, setOpeningBookingReference] = useState("");
   const [upgradeQuantities, setUpgradeQuantities] = useState<
     Record<string, number>
   >({});
   const [upgradeReference, setUpgradeReference] = useState("");
   const [adminSummary, setAdminSummary] = useState<AdminSummary | null>(null);
   const [activeAdminDashboard, setActiveAdminDashboard] =
-    useState<AdminDashboardView>(1);
+    useState<AdminDashboardView>(2);
   const [adminError, setAdminError] = useState("");
   const [isLoadingAdminSummary, setIsLoadingAdminSummary] = useState(false);
   const [collectionFromDate, setCollectionFromDate] = useState(() =>
@@ -691,8 +580,10 @@ export default function App() {
   const [seasonPassConfig, setSeasonPassConfig] =
     useState<SeasonPassConfig | null>(null);
   const [isMenuLoading, setIsMenuLoading] = useState(true);
+  const [menuRevision, setMenuRevision] = useState(0);
   const [menuError, setMenuError] = useState("");
   const [seasonPasses, setSeasonPasses] = useState(0);
+  const [seasonTakeawayQuantities, setSeasonTakeawayQuantities] = useState<Record<string, number>>({});
   const [quantities, setQuantities] = useState<Record<string, MealQuantities>>(
     {}
   );
@@ -758,7 +649,7 @@ export default function App() {
     return () => {
       active = false;
     };
-  }, []);
+  }, [menuRevision]);
 
   const getMealQuantities = (mealId: string) =>
     quantities[mealId] ?? { dineIn: 0, takeaway: 0 };
@@ -787,7 +678,10 @@ export default function App() {
         meal.takeawayPrice * quantity.takeaway
       );
     }, 0);
-  const couponTotal = activeSeasonPasses * currentSeasonPassPrice + granularTotal;
+  const passTakeawayQuantity = (day: string) => Math.min(activeSeasonPasses, Math.max(0, seasonTakeawayQuantities[day] || 0));
+  const passDaySummary = (day: string) => `${day}: ${activeSeasonPasses - passTakeawayQuantity(day)} dine-in, ${passTakeawayQuantity(day)} takeaway`;
+  const seasonTakeawayExtra = seasonPassLunchDays.reduce((sum, day) => sum + passTakeawayQuantity(day) * 30, 0);
+  const couponTotal = activeSeasonPasses * currentSeasonPassPrice + seasonTakeawayExtra + granularTotal;
   const total = couponTotal + (donationSelected ? DONATION_AMOUNT : 0);
   const individualBookingItems: BookingItemPayload[] = days
     .flatMap((day) =>
@@ -827,21 +721,27 @@ export default function App() {
       })
     )
     .filter((item) => item.quantity > 0);
-  const seasonPassUnitPrice =
-    seasonPassLunchDays.length > 0
-      ? currentSeasonPassPrice / seasonPassLunchDays.length
-      : 0;
   const seasonPassBookingItems: BookingItemPayload[] =
     activeSeasonPasses > 0
-      ? seasonPassLunchDays.map((dayName) => ({
-          dayName,
-          dayDate: days.find((day) => day.name === dayName)?.date || "",
-          mealType: seasonPassMealType,
-          quantity: activeSeasonPasses,
-          unitPrice: seasonPassUnitPrice,
-          lineTotal: seasonPassUnitPrice * activeSeasonPasses,
-          source: "Season Pass" as const,
-        }))
+      ? seasonPassLunchDays.flatMap((dayName, dayIndex) => {
+          const basePaise = Math.floor(Math.round(currentSeasonPassPrice * 100) / seasonPassLunchDays.length)
+            + (dayIndex < Math.round(currentSeasonPassPrice * 100) % seasonPassLunchDays.length ? 1 : 0);
+          const takeaway = passTakeawayQuantity(dayName);
+          return (["Dine-In", "Takeaway"] as const).map(serviceType => {
+            const quantity = serviceType === "Takeaway" ? takeaway : activeSeasonPasses - takeaway;
+            const unitPaise = basePaise + (serviceType === "Takeaway" ? 3000 : 0);
+            return {
+              dayName,
+              dayDate: days.find((day) => day.name === dayName)?.date || "",
+              mealType: seasonPassMealType,
+              serviceType,
+              quantity,
+              unitPrice: unitPaise / 100,
+              lineTotal: unitPaise * quantity / 100,
+              source: "Season Pass" as const,
+            };
+          }).filter(item => item.quantity > 0);
+        })
       : [];
   const bookingItems = [...seasonPassBookingItems, ...individualBookingItems];
   const mealItems: ReviewItem[] = individualBookingItems.map((item) => ({
@@ -865,9 +765,9 @@ export default function App() {
       ? [
           {
             id: "season-pass",
-            label: "Season pass",
+            label: `Season pass — ${seasonPassLunchDays.map(passDaySummary).join(", ")}`,
             quantity: activeSeasonPasses,
-            subtotal: activeSeasonPasses * currentSeasonPassPrice,
+            subtotal: activeSeasonPasses * currentSeasonPassPrice + seasonTakeawayExtra,
           },
         ]
       : []),
@@ -880,7 +780,7 @@ export default function App() {
     )
     .map((item) => ({
       id: item.id,
-      label: `${item.bookingReference}: ${item.dayName} ${item.mealType} (${item.foodType}) to Takeaway`,
+      label: `${item.bookingReference}: ${item.dayName} ${item.mealType} (${item.source === "Season Pass" ? "Season pass" : item.foodType}) to Takeaway`,
       quantity: upgradeQuantities[item.id] ?? 0,
       subtotal: item.extraUnitPrice * (upgradeQuantities[item.id] ?? 0),
     }));
@@ -888,9 +788,9 @@ export default function App() {
     (sum, item) => sum + item.subtotal,
     0
   );
-  const paymentTotal = paymentPurpose === "upgrade" ? upgradeTotal : total;
+  const paymentTotal = paymentPurpose === "upgrade" ? upgradeTotal : paymentPurpose === "donation" ? DONATION_AMOUNT : total;
   const paymentItems =
-    paymentPurpose === "upgrade" ? selectedUpgradeItems : selectedItems;
+    paymentPurpose === "upgrade" ? selectedUpgradeItems : paymentPurpose === "donation" ? selectedItems.filter(item => item.id === "pujo-donation") : selectedItems;
   const cashAmountValue = Number(cashAmount.replace(/,/g, "").trim());
   const hasCashAmount = cashAmount.trim().length > 0;
   const isCashAmountValid =
@@ -925,7 +825,7 @@ export default function App() {
     donationSelected
       ? `Pujo donation x 1 (${currency(DONATION_AMOUNT)})`
       : null,
-    activeSeasonPasses > 0 ? `Season pass x ${activeSeasonPasses}` : null,
+    activeSeasonPasses > 0 ? `Season pass x ${activeSeasonPasses}: ${seasonPassLunchDays.map(passDaySummary).join(", ")}` : null,
     ...mealBookingDetails,
   ]
     .filter((detail): detail is string => detail !== null)
@@ -949,11 +849,12 @@ export default function App() {
   )}&cu=INR&tn=${encodeURIComponent(
     paymentPurpose === "upgrade"
       ? "UUC Pujo takeaway upgrade"
-      : "UUC Pujo food coupons"
+      : paymentPurpose === "donation" ? "UUC Pujo donation" : "UUC Pujo food coupons"
   )}`;
 
   const changeSeasonPasses = (next: number) => {
     setSeasonPasses(next);
+    setSeasonTakeawayQuantities(current => Object.fromEntries(Object.entries(current).map(([day, qty]) => [day, Math.min(qty, next)])));
   };
 
   const changeMealQuantity = (mealId: string, next: number) => {
@@ -990,6 +891,7 @@ export default function App() {
     setEligibilityError("");
     setManageError("");
     setManagedBookings([]);
+    setManagedBookingReference("");
     setUpgradeQuantities({});
     setIsLoadingManagedBookings(true);
 
@@ -1020,7 +922,58 @@ export default function App() {
     }
   };
 
+  const openBookingFromCollection = async (row: CollectionBooking) => {
+    if (openingBookingReference) return;
+    setCollectionError("");
+    setOpeningBookingReference(row.bookingReference);
+
+    try {
+      const separator = row.apartmentNumber.indexOf("/");
+      if (separator < 1) {
+        throw new Error("This booking has an invalid apartment number.");
+      }
+      const tower = row.apartmentNumber.slice(0, separator).trim();
+      const apartment = row.apartmentNumber.slice(separator + 1).trim();
+      if (!TOWER_OPTIONS.includes(tower) || !isValidApartmentNumber(apartment)) {
+        throw new Error("This booking has an invalid apartment number.");
+      }
+
+      const result = await callBookingsApi<ManagedBookingsResponse>({
+        action: "getBookingsForApartment",
+        towerNumber: tower,
+        apartmentNumber: apartment,
+        bookingReference: row.bookingReference,
+      });
+      if (!result.ok || !Array.isArray(result.bookings)) {
+        throw new Error(result.error || "Unable to load this booking.");
+      }
+      const booking = result.bookings.find(
+        (candidate) => candidate.bookingReference === row.bookingReference
+      );
+      if (!booking) {
+        throw new Error("This booking was not found for the listed apartment. Please refresh the report.");
+      }
+
+      setTowerNumber(tower);
+      setApartmentNumber(apartment);
+      setManagedBookingReference(row.bookingReference);
+      setManagedBookings([booking]);
+      setUpgradeQuantities({});
+      upgradeRequestIdRef.current = "";
+      setManageError("");
+      setBookingSubmissionError("");
+      setScreen("manage");
+    } catch (error) {
+      setCollectionError(
+        error instanceof Error ? error.message : "Unable to load this booking."
+      );
+    } finally {
+      setOpeningBookingReference("");
+    }
+  };
+
   const loadAdminSummary = async () => {
+    if (!hasAdminToken()) { setScreen("admin-login"); return; }
     if (!BOOKINGS_API_URL) {
       setAdminError(
         "Booking service is not configured yet. Please try again later."
@@ -1118,7 +1071,17 @@ export default function App() {
     });
   };
 
+  const validateDonationReceipt = () => {
+    if (paymentPurpose !== "upgrade" && donationSelected &&
+      (!/^[0-9]{1,15}$/.test(donationReceiptNumber.trim()) || Number(donationReceiptNumber) <= 0)) {
+      setBookingSubmissionError("Enter a valid Pujo donation receipt number (up to 15 digits).");
+      return false;
+    }
+    return true;
+  };
+
   const completeBooking = async (method: PaymentMethod) => {
+    if (!validateDonationReceipt()) return;
     if (submissionInFlightRef.current) return;
     if (!TOWER_OPTIONS.includes(towerNumber)) {
       setBookingSubmissionError("Choose a valid tower.");
@@ -1128,8 +1091,8 @@ export default function App() {
       setBookingSubmissionError("Enter a valid apartment number.");
       return;
     }
-    if (!isValidWhatsAppNumber(whatsAppNumber)) {
-      setBookingSubmissionError("Enter a valid 10-digit WhatsApp number.");
+    if (!isValidPhoneNumber(phoneNumber)) {
+      setBookingSubmissionError("Enter a valid 10-digit phone number.");
       return;
     }
     if (donationSelected && !isValidDonorName(donorName)) {
@@ -1155,14 +1118,16 @@ export default function App() {
       const result = await callBookingsApi<{
         ok?: boolean;
         booking?: { bookingReference?: string };
+        donation?: { receiptNumber?: string };
         error?: string;
       }>({
+        action: paymentPurpose === "donation" ? "createDonation" : "createBooking",
         bookingRequestId: bookingRequestIdRef.current,
         towerNumber,
         apartmentNumber,
-        whatsAppNumber,
+        phoneNumber,
         paymentMethod: method,
-        payableAmount: total,
+        payableAmount: paymentTotal,
         paymentReference:
           method === "cash"
             ? ""
@@ -1170,18 +1135,19 @@ export default function App() {
             ? chequeNumber
             : upiTransactionId,
         bookingDetails,
-        bookingItems,
+        bookingItems: paymentPurpose === "donation" ? [] : bookingItems,
         donation: donationSelected
-          ? { name: donorName, amount: DONATION_AMOUNT }
+          ? { name: donorName, amount: DONATION_AMOUNT, receiptNumber: donationReceiptNumber.trim() }
           : null,
       });
 
-      if (!result.ok || !result.booking?.bookingReference) {
-        throw new Error(result.error || "Unable to save booking.");
+      const reference = paymentPurpose === "donation" ? result.donation?.receiptNumber : result.booking?.bookingReference;
+      if (!result.ok || !reference) {
+        throw new Error(result.error || "Unable to save payment.");
       }
 
       setPaymentMethod(method);
-      setBookingReference(result.booking.bookingReference);
+      setBookingReference(reference);
       setScreen("success");
     } catch (error) {
       setBookingSubmissionError(
@@ -1228,6 +1194,9 @@ export default function App() {
         action: "upgradeToTakeaway",
         towerNumber,
         apartmentNumber,
+        ...(managedBookingReference
+          ? { bookingReference: managedBookingReference }
+          : {}),
         itemUpgrades,
         upgradeRequestId: upgradeRequestIdRef.current,
         paymentMethod: method,
@@ -1268,16 +1237,19 @@ export default function App() {
   const startNewBooking = () => {
     setTowerNumber("");
     setApartmentNumber("");
-    setWhatsAppNumber("");
+    setPhoneNumber("");
     setDonationRecordMissing(false);
     setDonationSelected(false);
     setDonationDeclined(false);
     setDonorName("");
+    setDonationReceiptNumber("");
     setEligibilityError("");
     setIsCheckingEligibility(false);
     setManageError("");
     setIsLoadingManagedBookings(false);
     setManagedBookings([]);
+    setManagedBookingReference("");
+    setOpeningBookingReference("");
     setUpgradeQuantities({});
     bookingRequestIdRef.current = "";
     upgradeRequestIdRef.current = "";
@@ -1292,6 +1264,7 @@ export default function App() {
     setCollectionError("");
     setIsLoadingCollectionReport(false);
     setSeasonPasses(0);
+    setSeasonTakeawayQuantities({});
     setQuantities({});
     setCashAmount("");
     setCashInputFocused(false);
@@ -1306,16 +1279,20 @@ export default function App() {
     setScreen("phone");
   };
 
+  if (screen === "admin-login") return <AdminAccess onSignedIn={() => { setScreen("admin"); void loadAdminSummary(); }} onBack={() => setScreen("phone")} />;
+  if (screen === "admin-menu") return <MenuAdmin onBack={() => setScreen("admin")} onChanged={() => setMenuRevision(v => v + 1)} />;
+
   if (screen === "phone") {
     const canLocateApartment =
       TOWER_OPTIONS.includes(towerNumber) &&
       isValidApartmentNumber(apartmentNumber);
     const canCheckApartment =
-      canLocateApartment && isValidWhatsAppNumber(whatsAppNumber);
+      canLocateApartment && isValidPhoneNumber(phoneNumber);
     const canContinueWithDonation =
       donationSelected &&
+      canLocateApartment &&
       isValidDonorName(donorName) &&
-      isValidWhatsAppNumber(whatsAppNumber);
+      isValidPhoneNumber(phoneNumber);
     const canManageBookings = canLocateApartment && !isLoadingManagedBookings;
 
     const checkEligibility = async () => {
@@ -1347,6 +1324,7 @@ export default function App() {
         }
 
         if (result.eligible) {
+          setPaymentPurpose("booking");
           if (result.donorName) setDonorName(result.donorName);
           setScreen("booking");
         } else setDonationRecordMissing(true);
@@ -1457,6 +1435,7 @@ export default function App() {
                           setDonationSelected(false);
                           setDonationDeclined(false);
                           setDonorName("");
+    setDonationReceiptNumber("");
                           setEligibilityError("");
                           setManageError("");
                         }}
@@ -1509,6 +1488,7 @@ export default function App() {
                           setDonationSelected(false);
                           setDonationDeclined(false);
                           setDonorName("");
+    setDonationReceiptNumber("");
                           setEligibilityError("");
                           setManageError("");
                         }}
@@ -1537,26 +1517,26 @@ export default function App() {
                     ) : null}
                   </View>
                 </View>
-                <View style={locationStyles.whatsAppField}>
-                  <Text style={styles.phoneCardLabel}>WHATSAPP NUMBER</Text>
+                <View style={locationStyles.phoneField}>
+                  <Text style={styles.phoneCardLabel}>PHONE NUMBER</Text>
                   <View
                     style={[
                       locationStyles.locationInputShell,
-                      focusedLocationField === "whatsapp" && inputFocusStyle,
+                      focusedLocationField === "phone" && inputFocusStyle,
                     ]}
                   >
                     <View style={locationStyles.phoneNumberRow}>
                       <Text style={locationStyles.countryCode}>+91</Text>
                       <TextInput
-                        value={whatsAppNumber}
+                        value={phoneNumber}
                         onChangeText={(value) => {
-                          setWhatsAppNumber(normalizeWhatsAppInput(value));
+                          setPhoneNumber(normalizePhoneInput(value));
                           setEligibilityError("");
                         }}
                         autoComplete="tel"
                         keyboardType="phone-pad"
                         maxLength={20}
-                        onFocus={() => setFocusedLocationField("whatsapp")}
+                        onFocus={() => setFocusedLocationField("phone")}
                         onBlur={() => setFocusedLocationField(null)}
                         placeholder="9876543210"
                         placeholderTextColor="#B68473"
@@ -1569,8 +1549,8 @@ export default function App() {
                       />
                     </View>
                   </View>
-                  {whatsAppNumber.length > 0 &&
-                  !isValidWhatsAppNumber(whatsAppNumber) ? (
+                  {phoneNumber.length > 0 &&
+                  !isValidPhoneNumber(phoneNumber) ? (
                     <Text style={locationStyles.validationText}>
                       Enter a valid 10-digit Indian mobile number.
                     </Text>
@@ -1578,7 +1558,7 @@ export default function App() {
                 </View>
                 <Text style={styles.phoneHint}>
                   We will check your Pujo donation status before booking and
-                  send the confirmation on WhatsApp.
+                  send your booking confirmation by SMS.
                 </Text>
                 {donationRecordMissing ? (
                   <View>
@@ -1587,8 +1567,7 @@ export default function App() {
                         No donation records found.
                       </Text>
                       <Text style={styles.notFoundText}>
-                        Would you like to make the Pujo donation now and book
-                        coupons together?
+                        Would you like to make the Pujo donation now? You can pay it on its own or book coupons together.
                       </Text>
                     </View>
                     {!donationSelected && !donationDeclined ? (
@@ -1623,8 +1602,7 @@ export default function App() {
                           Pujo donation added
                         </Text>
                         <Text style={donationStyles.donationBody}>
-                          {currency(DONATION_AMOUNT)} will be included with your
-                          coupon payment.
+                          {currency(DONATION_AMOUNT)} donation. Enter your name, then continue to coupons or pay the donation on its own.
                         </Text>
                         <Text style={styles.phoneCardLabel}>YOUR NAME</Text>
                         <TextInput
@@ -1693,7 +1671,7 @@ export default function App() {
               style={[
                 styles.welcomeActions,
                 isPhoneWidth && styles.phoneWelcomeActions,
-                shouldStackHomeActions && styles.stackedWelcomeActions,
+                (shouldStackHomeActions || (isPhoneWidth && donationSelected)) && styles.stackedWelcomeActions,
               ]}
             >
               <Pressable
@@ -1704,14 +1682,14 @@ export default function App() {
                 }
                 onPress={() =>
                   donationSelected
-                    ? setScreen("booking")
+                    ? (setPaymentPurpose("booking"), setScreen("booking"))
                     : void checkEligibility()
                 }
                 style={({ pressed }) => [
                   styles.primaryButton,
                   styles.actionButton,
                   styles.primaryActionButton,
-                  shouldStackHomeActions && styles.stackedActionButton,
+                  (shouldStackHomeActions || (isPhoneWidth && donationSelected)) && styles.stackedActionButton,
                   (donationSelected
                     ? !canContinueWithDonation
                     : !canCheckApartment || isCheckingEligibility) &&
@@ -1732,12 +1710,30 @@ export default function App() {
                 </Text>
                 <Text style={styles.buttonArrow}>→</Text>
               </Pressable>
+              {donationRecordMissing && donationSelected && (
+                <Pressable
+                  accessibilityRole="button"
+                  disabled={!canContinueWithDonation}
+                  onPress={() => {
+                    setPaymentPurpose("donation");
+                    setBookingSubmissionError("");
+                    setCashAmount("");
+                    setChequeNumber("");
+                    setUpiTransactionId("");
+                    setUpiPaymentReported(false);
+                    setScreen("payment");
+                  }}
+                  style={({ pressed }) => [styles.secondaryActionButton, (shouldStackHomeActions || (isPhoneWidth && donationSelected)) && styles.stackedActionButton, !canContinueWithDonation && styles.secondaryActionButtonDisabled, pressed && styles.pressed]}
+                >
+                  <Text style={styles.secondaryActionButtonText}>Pay donation only</Text>
+                </Pressable>
+              )}
               <Pressable
                 disabled={!canManageBookings}
                 onPress={() => void loadManagedBookings()}
                 style={({ pressed }) => [
                   styles.secondaryActionButton,
-                  shouldStackHomeActions && styles.stackedActionButton,
+                  (shouldStackHomeActions || (isPhoneWidth && donationSelected)) && styles.stackedActionButton,
                   !canManageBookings && styles.secondaryActionButtonDisabled,
                   pressed && canManageBookings && styles.pressed,
                 ]}
@@ -1749,12 +1745,12 @@ export default function App() {
               <Pressable
                 disabled={isLoadingAdminSummary}
                 onPress={() => {
-                  setActiveAdminDashboard(1);
+                  setActiveAdminDashboard(2);
                   void loadAdminSummary();
                 }}
                 style={({ pressed }) => [
                   styles.secondaryActionButton,
-                  shouldStackHomeActions && styles.stackedActionButton,
+                  (shouldStackHomeActions || (isPhoneWidth && donationSelected)) && styles.stackedActionButton,
                   isLoadingAdminSummary && styles.secondaryActionButtonDisabled,
                   pressed && !isLoadingAdminSummary && styles.pressed,
                 ]}
@@ -1822,12 +1818,6 @@ export default function App() {
           { label: "Individual", value: totals.individual },
         ]
       : [];
-    const dashboardOneData = adminSummary?.dashboardOne || { columns: [], rows: [] };
-    const hasDashboardOneData = dashboardOneData.columns.length > 0 && dashboardOneData.rows.length > 0;
-    const dashboardOneEventCount = new Set(
-      dashboardOneData.rows.map((row) => row.eventName)
-    ).size;
-
     return (
       <SafeAreaView style={styles.safeArea}>
         <StatusBar style="dark" />
@@ -1845,8 +1835,19 @@ export default function App() {
           contentContainerStyle={styles.bookingContent}
           showsVerticalScrollIndicator={false}
         >
+          <View style={styles.adminToolbar}>
+            <Text style={styles.adminToolbarLabel}>Reports</Text>
+            <Pressable
+              accessibilityRole="button"
+              onPress={() => setScreen("admin-menu")}
+              style={({ pressed }) => [styles.adminMenuButton, pressed && styles.pressed]}
+            >
+              <Text style={styles.adminMenuButtonText}>Events & menus</Text>
+              <Text style={styles.adminMenuButtonText}>→</Text>
+            </Pressable>
+          </View>
           <View style={styles.adminDashboardTabs}>
-            {([1, 2, 3] as const).map((dashboardNumber) => {
+            {([2, 3, 4] as const).map((dashboardNumber) => {
               const selected = activeAdminDashboard === dashboardNumber;
               return (
                 <Pressable
@@ -1884,48 +1885,26 @@ export default function App() {
               {ADMIN_DASHBOARD_LABELS[activeAdminDashboard]}
             </Text>
             <Text style={styles.introBody}>
-              {activeAdminDashboard === 1
-                ? "Quantity and amount matrix by event, service, meal, and food type."
-                : activeAdminDashboard === 2
+              {activeAdminDashboard === 2
                 ? "Detailed coupon totals and day-wise meal breakdown."
-                : "Total collection and booking records for an inclusive date range."}
+                : activeAdminDashboard === 3 ? "Total collection and booking records for an inclusive date range." : "Look up total coupons and daily meals for an apartment."}
             </Text>
-            {updatedAt ? (
+            {updatedAt && activeAdminDashboard !== 4 ? (
               <Text style={styles.adminTimestamp}>Updated {updatedAt}</Text>
             ) : null}
           </View>
-          {adminError && activeAdminDashboard !== 3 ? (
+          {adminError && activeAdminDashboard === 2 ? (
             <Text style={styles.submissionError}>{adminError}</Text>
           ) : null}
           {collectionError && activeAdminDashboard === 3 ? (
             <Text style={styles.submissionError}>{collectionError}</Text>
           ) : null}
-          {!adminSummary && activeAdminDashboard !== 3 ? (
+          {!adminSummary && activeAdminDashboard === 2 ? (
             <Text style={styles.menuStateMessage}>
               No admin summary is loaded yet.
             </Text>
           ) : null}
-          {adminSummary && activeAdminDashboard === 1 && !hasDashboardOneData ? (
-            <Text style={styles.menuStateMessage}>
-              Dashboard sheet data is unavailable. Deploy the updated booking service and refresh.
-            </Text>
-          ) : null}
-          {adminSummary && activeAdminDashboard === 1 && hasDashboardOneData ? (
-            <>
-              <DashboardMatrix
-                title="Quantity"
-                columns={dashboardOneData.columns}
-                rows={dashboardOneData.rows}
-                valueType="quantity"
-              />
-              <DashboardMatrix
-                title="Amount"
-                columns={dashboardOneData.columns}
-                rows={dashboardOneData.rows}
-                valueType="amount"
-              />
-            </>
-          ) : null}
+          {activeAdminDashboard === 4 ? <ApartmentCoupons /> : null}
           {adminSummary && activeAdminDashboard === 2 ? (
             <>
               <View style={styles.adminMetricGrid}>
@@ -2075,7 +2054,11 @@ export default function App() {
                     </Text>
                   </View>
                   {collectionReport.bookings.length > 0 ? (
-                    <CollectionBookingsTable rows={collectionReport.bookings} />
+                    <CollectionBookingsTable
+                      onOpenBooking={(booking) => void openBookingFromCollection(booking)}
+                      openingReference={openingBookingReference}
+                      rows={collectionReport.bookings}
+                    />
                   ) : (
                     <Text style={styles.menuStateMessage}>
                       No bookings were created in this date range.
@@ -2093,18 +2076,14 @@ export default function App() {
         <View style={styles.summaryBar}>
           <View>
             <Text style={styles.summaryLabel}>
-              {activeAdminDashboard === 1
-                ? "Quantity and amount matrix"
-                : activeAdminDashboard === 2
+              {activeAdminDashboard === 2
                 ? "Coupon bookings only"
                 : collectionReport
                 ? `${displayFullDate(collectionReport.fromDate)} to ${displayFullDate(collectionReport.toDate)}`
                 : "Selected date range"}
             </Text>
             <Text style={styles.summaryTotal}>
-              {activeAdminDashboard === 1
-                ? `${dashboardOneEventCount} events`
-                : activeAdminDashboard === 2 && totals
+              {activeAdminDashboard === 2 && totals
                 ? currency(totals.amountCollected)
                 : activeAdminDashboard === 3 && collectionReport
                 ? currency(collectionReport.totalCollection)
@@ -2161,13 +2140,20 @@ export default function App() {
       <SafeAreaView style={styles.safeArea}>
         <StatusBar style="dark" />
         <View style={styles.bookingHeader}>
-          <Pressable onPress={() => setScreen("phone")} hitSlop={12}>
-            <Text style={styles.backButton}>‹ Home</Text>
+          <Pressable
+            onPress={() => setScreen(managedBookingReference ? "admin" : "phone")}
+            hitSlop={12}
+          >
+            <Text style={styles.backButton}>
+              {managedBookingReference ? "‹ Bookings" : "‹ Home"}
+            </Text>
           </Pressable>
           <View>
-            <Text style={styles.headerKicker}>MANAGE BOOKINGS</Text>
+            <Text style={styles.headerKicker}>
+              {managedBookingReference ? "MANAGE BOOKING" : "MANAGE BOOKINGS"}
+            </Text>
             <Text style={styles.headerTitle}>
-              {towerNumber}/{apartmentNumber}
+              {managedBookingReference || `${towerNumber}/${apartmentNumber}`}
             </Text>
           </View>
           <HeaderLogo />
@@ -2185,6 +2171,11 @@ export default function App() {
               to takeaway. Existing takeaway meals and season passes cannot be
               changed here.
             </Text>
+            {managedBookingReference ? (
+              <Text style={styles.adminTimestamp}>
+                Only {managedBookingReference} for apartment {towerNumber}/{apartmentNumber} is shown.
+              </Text>
+            ) : null}
           </View>
           {managedBookings.map((booking) => (
             <View key={booking.bookingReference} style={styles.manageCard}>
@@ -2220,7 +2211,7 @@ export default function App() {
                   : item.serviceType === "Takeaway"
                   ? "Already takeaway"
                   : item.source === "Season Pass"
-                  ? "Season pass cannot be modified"
+                  ? "This day is no longer available for upgrade"
                   : isDineIn
                   ? "No takeaway price difference"
                   : "Not eligible";
@@ -2239,14 +2230,15 @@ export default function App() {
                         <Text style={styles.manageItemTitle}>
                           {item.dayName} · {item.mealType}
                         </Text>
+                        {item.source === "Season Pass" && <Text style={styles.foodTypeBadge}>Season pass</Text>}
                         {item.foodType ? (
                           <Text style={styles.foodTypeBadge}>
                             {item.foodType}
                           </Text>
                         ) : null}
-                        {item.serviceType ? (
+                        {item.serviceType || item.source === "Season Pass" ? (
                           <Text style={styles.serviceTypeBadge}>
-                            {item.serviceType}
+                            {item.serviceType || "Dine-In"}
                           </Text>
                         ) : null}
                       </View>
@@ -2327,7 +2319,7 @@ export default function App() {
 
   if (screen === "payment") {
     const paymentBackScreen: Screen =
-      paymentPurpose === "upgrade" ? "manage" : "booking";
+      paymentPurpose === "upgrade" ? "manage" : paymentPurpose === "donation" ? "phone" : "booking";
 
     return (
       <SafeAreaView style={styles.safeArea}>
@@ -2335,14 +2327,14 @@ export default function App() {
         <View style={styles.bookingHeader}>
           <Pressable onPress={() => setScreen(paymentBackScreen)} hitSlop={12}>
             <Text style={styles.backButton}>
-              {paymentPurpose === "upgrade" ? "‹ Manage" : "‹ Coupons"}
+              {paymentPurpose === "upgrade" ? "‹ Manage" : paymentPurpose === "donation" ? "‹ Home" : "‹ Coupons"}
             </Text>
           </Pressable>
           <View>
             <Text style={styles.headerKicker}>
               {paymentPurpose === "upgrade"
                 ? "TAKEAWAY UPGRADE"
-                : "STEP 3 OF 3"}
+                : paymentPurpose === "donation" ? "PUJO DONATION" : "STEP 3 OF 3"}
             </Text>
             <Text style={styles.headerTitle}>Complete payment</Text>
           </View>
@@ -2360,7 +2352,7 @@ export default function App() {
           <Text style={styles.paymentLead}>
             {paymentPurpose === "upgrade"
               ? "Review the dine-in meals being switched to takeaway, then collect only the price difference."
-              : "Review your booking and choose how you would like to pay."}
+              : paymentPurpose === "donation" ? "Review your donation, enter the receipt number, and choose how to pay." : "Review your booking and choose how you would like to pay."}
           </Text>
           {bookingSubmissionError ? (
             <Text style={styles.submissionError}>{bookingSubmissionError}</Text>
@@ -2369,13 +2361,30 @@ export default function App() {
             <Text style={styles.reviewEyebrow}>
               {paymentPurpose === "upgrade"
                 ? "TAKEAWAY UPGRADES"
-                : "YOUR COUPONS"}
+                : paymentPurpose === "donation" ? "YOUR DONATION" : "YOUR COUPONS"}
             </Text>
             {paymentItems.map((item) => (
-              <View key={item.id} style={styles.reviewRow}>
+              <View key={item.id} style={[styles.reviewRow, item.id === "pujo-donation" && { flexWrap: "wrap", alignItems: "center" }]}>
                 <Text style={styles.reviewItem}>
                   {item.label} × {item.quantity}
                 </Text>
+                {item.id === "pujo-donation" && paymentPurpose !== "upgrade" && (
+                  <View style={[styles.receiptField, isPhoneWidth && { width: "100%" }]}>
+                    <Text style={styles.receiptLabel}>Receipt number</Text>
+                    <TextInput
+                      accessibilityLabel="Pujo donation receipt number"
+                      placeholder="Enter receipt no."
+                      keyboardType="number-pad"
+                      maxLength={15}
+                      value={donationReceiptNumber}
+                      onChangeText={value => {
+                        setDonationReceiptNumber(value.replace(/[^0-9]/g, ""));
+                        setBookingSubmissionError("");
+                      }}
+                      style={styles.receiptInput}
+                    />
+                  </View>
+                )}
                 <Text style={styles.reviewPrice}>
                   {currency(item.subtotal)}
                 </Text>
@@ -2394,6 +2403,7 @@ export default function App() {
           <Pressable
             disabled={isSubmitting}
             onPress={() => {
+              if (!validateDonationReceipt()) return;
               setBookingSubmissionError("");
               setCashAmount("");
               setScreen("cash");
@@ -2418,6 +2428,7 @@ export default function App() {
           <Pressable
             disabled={isSubmitting}
             onPress={() => {
+              if (!validateDonationReceipt()) return;
               setBookingSubmissionError("");
               setScreen("cheque");
             }}
@@ -2441,6 +2452,7 @@ export default function App() {
           <Pressable
             disabled={isSubmitting}
             onPress={() => {
+              if (!validateDonationReceipt()) return;
               setBookingSubmissionError("");
               setUpiPaymentReported(false);
               setUpiTransactionId("");
@@ -2535,7 +2547,7 @@ export default function App() {
               {isSubmitting
                 ? paymentPurpose === "upgrade"
                   ? "Saving upgrade..."
-                  : "Saving booking..."
+                  : paymentPurpose === "donation" ? "Saving donation..." : "Saving booking..."
                 : "Confirm cash payment"}
             </Text>
             <Text style={styles.buttonArrow}>→</Text>
@@ -2592,7 +2604,7 @@ export default function App() {
               {isSubmitting
                 ? paymentPurpose === "upgrade"
                   ? "Saving upgrade..."
-                  : "Saving booking..."
+                  : paymentPurpose === "donation" ? "Saving donation..." : "Saving booking..."
                 : "Confirm cheque payment"}
             </Text>
             <Text style={styles.buttonArrow}>→</Text>
@@ -2678,7 +2690,7 @@ export default function App() {
                   {isSubmitting
                     ? paymentPurpose === "upgrade"
                       ? "Saving upgrade..."
-                      : "Saving booking..."
+                      : paymentPurpose === "donation" ? "Saving donation..." : "Saving booking..."
                     : "Confirm payment details"}
                 </Text>
                 <Text style={styles.buttonArrow}>→</Text>
@@ -2720,13 +2732,13 @@ export default function App() {
               <Text style={styles.successBody}>
                 {paymentPurpose === "upgrade"
                   ? "Your takeaway upgrade is confirmed."
-                  : "Your food coupon booking is confirmed."}
+                  : paymentPurpose === "donation" ? "Your Pujo donation is confirmed." : "Your food coupon booking is confirmed."}
               </Text>
               <View style={styles.successReference}>
                 <Text style={styles.successReferenceLabel}>
                   {paymentPurpose === "upgrade"
                     ? "UPDATED BOOKING"
-                    : "BOOKING REFERENCE"}
+                    : paymentPurpose === "donation" ? "DONATION RECEIPT" : "BOOKING REFERENCE"}
                 </Text>
                 <Text style={styles.successReferenceValue}>
                   {paymentPurpose === "upgrade"
@@ -2738,14 +2750,22 @@ export default function App() {
               <Text style={styles.successAmount}>{currency(paymentTotal)}</Text>
             </View>
             <Pressable
-              onPress={startNewBooking}
+              onPress={() => {
+                if (managedBookingReference) {
+                  setActiveAdminDashboard(3);
+                  setScreen("admin");
+                  void loadCollectionReport();
+                } else {
+                  startNewBooking();
+                }
+              }}
               style={({ pressed }) => [
                 styles.primaryButton,
                 pressed && styles.pressed,
               ]}
             >
               <Text style={styles.primaryButtonText}>
-                Start another booking
+                {managedBookingReference ? "Back to bookings" : "Start another booking"}
               </Text>
               <Text style={styles.buttonArrow}>→</Text>
             </Pressable>
@@ -2773,6 +2793,9 @@ export default function App() {
         showsVerticalScrollIndicator={false}
       >
         <View style={styles.introBlock}>
+          <Text style={styles.bookingApartmentLabel}>
+            Tower {towerNumber} · Flat {apartmentNumber}
+          </Text>
           <Text style={styles.introTitle}>Book for the whole family</Text>
           <Text
             style={styles.introBody}
@@ -2793,6 +2816,34 @@ export default function App() {
               onChange={changeSeasonPasses}
               disabled={false}
             />
+            {activeSeasonPasses > 0 && (
+              <View style={{ gap: 12, marginTop: 18 }}>
+                <Text style={styles.seasonSubtitle}>Split each day’s passes between dine-in and takeaway. Takeaway adds ₹30 per person per day.</Text>
+                {seasonPassLunchDays.map(day => (
+                  <View key={day} style={{ gap: 8 }}>
+                    <Text style={styles.seasonSubtitle}>{day}</Text>
+                    <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
+                      {(["Dine-In", "Takeaway"] as const).map(service => {
+                        const takeaway = passTakeawayQuantity(day);
+                        const quantity = service === "Takeaway" ? takeaway : activeSeasonPasses - takeaway;
+                        return (
+                          <View key={service} style={{ gap: 8, flex: 1, minWidth: 180 }}>
+                            <Text style={styles.seasonSubtitle}>{service === "Takeaway" ? "Takeaway (+₹30/person)" : "Dine-in"}</Text>
+                            <QuantityControl
+                              quantity={quantity}
+                              maxQuantity={activeSeasonPasses}
+                              disabled={false}
+                              onChange={next => setSeasonTakeawayQuantities(current => ({ ...current, [day]: service === "Takeaway" ? next : activeSeasonPasses - next }))}
+                            />
+                          </View>
+                        );
+                      })}
+                    </View>
+                  </View>
+                ))}
+                <Text style={styles.seasonSubtitle}>Season pass total: {currency(activeSeasonPasses * currentSeasonPassPrice + seasonTakeawayExtra)}</Text>
+              </View>
+            )}
           </View>
         ) : null}
         <View style={styles.sectionHeading}>
@@ -2969,7 +3020,7 @@ const locationStyles = StyleSheet.create({
   },
   towerPickerItem: { color: "#4B1815", fontFamily: displayFont, fontSize: 25 },
   apartmentField: { flex: 1.3 },
-  whatsAppField: { marginTop: 14 },
+  phoneField: { marginTop: 14 },
   phoneNumberRow: { alignItems: "center", flexDirection: "row" },
   countryCode: {
     color: "#4B1815",
@@ -3413,6 +3464,12 @@ const styles = StyleSheet.create({
     paddingBottom: 128,
     width: "100%",
   },
+  bookingApartmentLabel: {
+    color: "#7C1D19",
+    fontSize: 16,
+    fontWeight: "700",
+    marginBottom: 10,
+  },
   introBlock: { marginBottom: 20 },
   introTitle: { color: "#5D211A", fontFamily: displayFont, fontSize: 29 },
   introBody: {
@@ -3711,6 +3768,31 @@ const styles = StyleSheet.create({
     fontWeight: "800",
     marginTop: 10,
   },
+  adminToolbar: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    flexWrap: "wrap",
+    gap: 12,
+    marginBottom: 12,
+  },
+  adminToolbarLabel: {
+    color: "#79584B",
+    fontSize: 18,
+    fontWeight: "700",
+  },
+  adminMenuButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 16,
+    borderWidth: 1,
+    borderColor: "#D8BE96",
+    borderRadius: 7,
+    paddingHorizontal: 14,
+    minHeight: 44,
+    backgroundColor: "#FFFDF8",
+  },
+  adminMenuButtonText: { color: "#7C1D19", fontSize: 14, fontWeight: "700" },
   adminDashboardTabs: {
     backgroundColor: "#F4E6D2",
     borderRadius: 9,
@@ -3840,12 +3922,13 @@ const styles = StyleSheet.create({
     paddingHorizontal: 11,
     paddingVertical: 13,
   },
-  collectionTableStrongText: {
-    color: "#5D211A",
+  collectionBookingLink: {
+    color: "#9B3523",
     fontSize: 12,
     fontWeight: "900",
     paddingHorizontal: 11,
     paddingVertical: 13,
+    textDecorationLine: "underline",
   },
   collectionTableAmount: {
     color: "#7C1D19",
@@ -4116,6 +4199,9 @@ const styles = StyleSheet.create({
     letterSpacing: 1.4,
     marginBottom: 9,
   },
+  receiptField: { width: 170, gap: 5 },
+  receiptLabel: { color: "#79584B", fontSize: 12, fontWeight: "700" },
+  receiptInput: { borderWidth: 1, borderColor: "#D8BE96", borderRadius: 7, padding: 10, minHeight: 42, backgroundColor: "#FFFDF8", color: "#5D211A", fontSize: 15 },
   reviewRow: {
     flexDirection: "row",
     gap: 14,
