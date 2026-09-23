@@ -1,5 +1,6 @@
 import { callBookingsApi, hasAdminToken } from "./src/api";
 import { AdminAccess } from "./components/AdminAccess";
+import { SubscriptionDashboard } from "./components/SubscriptionDashboard";
 import { ApartmentCoupons } from "./components/ApartmentCoupons";
 import { MenuAdmin } from "./components/MenuAdmin";
 import { StatusBar } from "expo-status-bar";
@@ -154,7 +155,7 @@ type AdminSummaryResponse = {
   summary?: AdminSummary;
   error?: string;
 };
-type AdminDashboardView = 2 | 3 | 4;
+type AdminDashboardView = 2 | 3 | 4 | 5;
 type CollectionBooking = {
   bookingReference: string;
   createdAt: string;
@@ -180,6 +181,7 @@ const ADMIN_DASHBOARD_LABELS: Record<AdminDashboardView, string> = {
   2: "Coupon Detail",
   3: "Bookings",
   4: "Apartment coupons",
+  5: "Subscriptions",
 };
 
 const MAX_QUANTITY = 15;
@@ -1849,7 +1851,7 @@ export default function App() {
             </Pressable>
           </View>
           <View style={styles.adminDashboardTabs}>
-            {([2, 3, 4] as const).map((dashboardNumber) => {
+            {([2, 3, 4, 5] as const).map((dashboardNumber) => {
               const selected = activeAdminDashboard === dashboardNumber;
               return (
                 <Pressable
@@ -1889,9 +1891,9 @@ export default function App() {
             <Text style={styles.introBody}>
               {activeAdminDashboard === 2
                 ? "Detailed coupon totals and day-wise meal breakdown."
-                : activeAdminDashboard === 3 ? "Total collection and booking records for an inclusive date range." : "Look up total coupons and daily meals for an apartment."}
+                : activeAdminDashboard === 3 ? "Total collection and booking records for an inclusive date range." : activeAdminDashboard === 4 ? "Look up total coupons and daily meals for an apartment." : "Paid and unpaid apartments by tower. An apartment is paid when any resident is marked Paid."}
             </Text>
-            {updatedAt && activeAdminDashboard !== 4 ? (
+            {updatedAt && (activeAdminDashboard === 2 || activeAdminDashboard === 3) ? (
               <Text style={styles.adminTimestamp}>Updated {updatedAt}</Text>
             ) : null}
           </View>
@@ -1907,6 +1909,7 @@ export default function App() {
             </Text>
           ) : null}
           {activeAdminDashboard === 4 ? <ApartmentCoupons /> : null}
+          {activeAdminDashboard === 5 ? <SubscriptionDashboard /> : null}
           {adminSummary && activeAdminDashboard === 2 ? (
             <>
               <View style={styles.adminMetricGrid}>
@@ -2075,7 +2078,7 @@ export default function App() {
             </>
           ) : null}
         </ScrollView>
-        <View style={styles.summaryBar}>
+        {activeAdminDashboard !== 5 && <View style={styles.summaryBar}>
           <View>
             <Text style={styles.summaryLabel}>
               {activeAdminDashboard === 2
@@ -2124,7 +2127,7 @@ export default function App() {
             </Text>
             <Text style={styles.continueArrow}>↻</Text>
           </Pressable>
-        </View>
+        </View>}
       </SafeAreaView>
     );
   }

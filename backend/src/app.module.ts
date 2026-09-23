@@ -86,6 +86,8 @@ class ApiController {
       "getAdminSummary",
       "getCollectionReport",
       "getApartmentCoupons",
+      "getSubscriptionSummary",
+      "getUnpaidResidents",
     ];
     if (
       !["GET", "POST"].includes(req.method) ||
@@ -102,6 +104,12 @@ class ApiController {
       case "getApartmentCoupons":
         this.auth.require(token);
         return { ok: true, report: await this.bookings.apartmentCoupons(p) };
+      case "getSubscriptionSummary":
+        this.auth.require(token);
+        return { ok: true, report: await this.bookings.subscriptionSummary() };
+      case "getUnpaidResidents":
+        this.auth.require(token);
+        return { ok: true, report: await this.bookings.unpaidResidents(p) };
       case "getAdminSummary":
         this.auth.require(token);
         return { ok: true, summary: await this.bookings.summary() };

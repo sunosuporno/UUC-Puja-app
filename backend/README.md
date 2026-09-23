@@ -109,3 +109,37 @@ The integration suite covers transaction rollback, donation eligibility, concurr
 The frontend can stay on Vercel; root `vercel.json` supports `/admin` navigation. Host this backend as a persistent Node process with PostgreSQL (local or managed), set `HOST=0.0.0.0`, production CORS origins, private secrets, and HTTPS. Use `npm ci`, `npm run build`, and `npm start` inside `backend`; run migrations separately before starting the release. Use your database provider's required TLS configuration.
 
 Vercel supports NestJS entry points such as `src/main.ts` directly. Deploying the backend there still requires verifying the build, configuring hosted PostgreSQL and production secrets, and testing the deployed flow. SMS is sent within the booking request, so no scheduler is required. Nothing has been published or provisioned in a paid service.
+
+### Subscription dashboard
+
+The admin-only `getSubscriptionSummary` action groups Resident Master by trimmed,
+case-normalized Block and Unit No. An apartment is paid if any member has Paid
+(case-insensitive, ignoring outer whitespace); every other apartment is unpaid.
+Rows without either identifier are excluded. Towers 1–9 and TH are always shown,
+including zero counts, and any additional block values are retained.
+
+One SQL query aggregates residents into apartments, then apartments into tower
+counts. Only summary counts reach the browser. The report refreshes on opening
+its tab or pressing Refresh; no cached totals or background jobs are maintained.
+No Neon schema change or new index is required for this dashboard. A full summary
+must inspect the source rows; on 1,102 local resident rows the query took about
+2.2 ms (not a production latency guarantee). Local totals at validation were
+384 paid / 332 unpaid / 716 apartments, reconciled independently from the source
+rows. The live spreadsheet can differ from the local snapshot.
+
+### Unpaid apartment contacts
+
+Below the subscription summary, admins can select tower 1–9 or TH to load
+`getUnpaidResidents`. A single parameterized SQL query first checks all members
+of each apartment for Paid, then selects exact Tenant memberships. If none exist,
+it selects exact Owner memberships with Primary Contact Y. Comparisons ignore
+case and surrounding whitespace; Owner Family and Tenant Family do not qualify.
+All qualifying rows are returned rather than arbitrarily discarding contacts.
+Apartments without a qualifying contact are counted and flagged in the UI.
+
+The table preserves source contact fields, sorts units naturally, and scrolls
+horizontally on narrow screens. Changing towers clears the old results and ignores
+late responses; summary Refresh also refreshes the contact table. Access requires
+an admin session. No migration or additional Neon index is needed at the current
+size: full local-data reconciliation passed for all ten towers, with the Tower 9
+query taking about 1.2 ms locally. No source records were modified.

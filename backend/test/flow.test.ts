@@ -90,7 +90,7 @@ beforeEach(async () => {
 after(async () => {
   await db.onModuleDestroy();
 });
-test("schema keeps exactly the five source tables and all original column counts", async () => {
+test("schema keeps five source tables with added resident and donation row IDs", async () => {
   const rows = (
     await db.pool.query(
       "SELECT table_name,count(*)::int AS n FROM information_schema.columns WHERE table_schema='public' GROUP BY table_name ORDER BY table_name",
@@ -99,9 +99,9 @@ test("schema keeps exactly the five source tables and all original column counts
   assert.deepEqual(rows, [
     { table_name: "Booking Items", n: 12 },
     { table_name: "Bookings", n: 12 },
-    { table_name: "Donations", n: 8 },
+    { table_name: "Donations", n: 9 },
     { table_name: "Food Menu", n: 9 },
-    { table_name: "Resident Master", n: 12 },
+    { table_name: "Resident Master", n: 13 },
   ]);
 });
 test("booking saves items and pending SMS; identical concurrent retries return one order", async () => {
@@ -942,4 +942,101 @@ test("apartment report totals include split season passes and upgrades without o
   await assert.rejects(
     bookings.apartmentCoupons({ ...loc, towerNumber: "99" }),
   );
+});
+
+test("subscriptions count unique apartments, any paid resident wins, and blanks are excluded", async () => {
+  await db.pool
+    .query(`INSERT INTO "Resident Master" ("Block", "Unit No", "Paid") VALUES
+    ('1', '101', 'Unpaid'), ('1', '101', 'Paid'), (' 1 ', ' 101 ', NULL),
+    ('1', '102', 'Unpaid'), ('1', '102', NULL),
+    ('2', '101', ' paid '), ('2', '102', ''),
+    (' th ', 'a', 'Unpaid'), ('TH', 'A', 'PAID'),
+    ('TH', 'B', NULL), ('TH', 'C', 'Pending'),
+    ('', '103', 'Paid'), (NULL, '104', 'Paid'), ('1', ' ', 'Paid'), ('1', NULL, 'Paid')`);
+  const report = await bookings.subscriptionSummary();
+  assert.deepEqual(report.totals, { paid: 3, unpaid: 4, total: 7 });
+  assert.equal(report.towers.length, 10);
+  assert.deepEqual(report.towers[0], {
+    tower: "1",
+    paid: 1,
+    unpaid: 1,
+    total: 2,
+  });
+  assert.deepEqual(report.towers[1], {
+    tower: "2",
+    paid: 1,
+    unpaid: 1,
+    total: 2,
+  });
+  assert.deepEqual(report.towers[2], {
+    tower: "3",
+    paid: 0,
+    unpaid: 0,
+    total: 0,
+  });
+  assert.deepEqual(report.towers[9], {
+    tower: "TH",
+    paid: 1,
+    unpaid: 2,
+    total: 3,
+  });
+  // A later payment must be reflected without rebuilding cached totals.
+  await db.pool.query(
+    `UPDATE "Resident Master" SET "Paid"='Paid' WHERE "Block"='1' AND "Unit No"='102'`,
+  );
+  assert.deepEqual((await bookings.subscriptionSummary()).totals, {
+    paid: 4,
+    unpaid: 3,
+    total: 7,
+  });
+});
+
+test("subscriptions return zero totals for an empty resident master", async () => {
+  const report = await bookings.subscriptionSummary();
+  assert.deepEqual(report.totals, { paid: 0, unpaid: 0, total: 0 });
+  assert.equal(report.towers.length, 10);
+  assert.ok(report.towers.every((row) => row.total === 0));
+});
+
+test("unpaid contacts prefer tenants, fall back to primary owners, and exclude any paid apartment", async () => {
+  await db.pool.query(`INSERT INTO "Resident Master"
+    ("Block", "Unit No", "Name", "Membership Status", "Primary Contact", "Paid") VALUES
+    ('1', '101', 'Owner ignored', 'Owner', 'Y', 'Unpaid'),
+    ('1', '101', 'Tenant A', 'Tenant', 'N', 'Unpaid'),
+    (' 1 ', ' 101 ', 'Tenant B', ' tenant ', 'N', NULL),
+    ('1', '101', 'Family ignored', 'Tenant Family', 'Y', 'Unpaid'),
+    ('1', '102', 'Primary owner', 'Owner', 'Y', 'Unpaid'),
+    ('1', '102', 'Other owner', 'Owner', 'N', 'Unpaid'),
+    ('1', '103', 'Paid owner', 'Owner', 'Y', 'Paid'),
+    ('1', '103', 'Unpaid tenant excluded', 'Tenant', 'N', 'Unpaid'),
+    ('1', '104', 'Paid family', 'Owner Family', 'N', ' paid '),
+    ('1', '104', 'Owner excluded', 'Owner', 'Y', 'Unpaid'),
+    ('1', '105', 'No primary', 'Owner', 'N', 'Unpaid'),
+    ('1', '106', 'Family only', 'Owner Family', 'Y', 'Unpaid'),
+    ('1', '10', 'Earlier unit', ' owner ', ' y ', ''),
+    ('1', '2', 'Earliest unit', 'Owner', 'Y', 'Unpaid'),
+    ('2', '101', 'Other tower', 'Owner', 'Y', 'Unpaid'),
+    ('1', ' ', 'Blank unit excluded', 'Tenant', 'N', 'Unpaid')`);
+  const report = await bookings.unpaidResidents({ towerNumber: "1" });
+  assert.equal(report.unpaidApartments, 6);
+  assert.equal(report.contactApartments, 4);
+  assert.deepEqual(
+    report.contacts.map((r: any) => r.name),
+    ["Earliest unit", "Earlier unit", "Tenant A", "Tenant B", "Primary owner"],
+  );
+  assert.ok(report.contacts.every((r: any) => r.block === "1"));
+  const other = await bookings.unpaidResidents({ towerNumber: "2" });
+  assert.equal(other.unpaidApartments, 1);
+  assert.equal(other.contacts[0].name, "Other tower");
+  const empty = await bookings.unpaidResidents({ towerNumber: "TH" });
+  assert.equal(empty.unpaidApartments, 0);
+  assert.deepEqual(empty.contacts, []);
+  await assert.rejects(bookings.unpaidResidents({ towerNumber: "99" }));
+  await assert.rejects(bookings.unpaidResidents({}));
+  await db.pool.query(
+    `UPDATE "Resident Master" SET "Paid"='Paid' WHERE "Name"='Tenant A'`,
+  );
+  const refreshed = await bookings.unpaidResidents({ towerNumber: "1" });
+  assert.equal(refreshed.unpaidApartments, 5);
+  assert.ok(refreshed.contacts.every((r: any) => r.unit !== "101"));
 });

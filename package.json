@@ -12,7 +12,8 @@
     "react-native": "0.86.2",
     "react-native-qrcode-svg": "^6.3.21",
     "react-native-svg": "15.15.4",
-    "react-native-web": "^0.21.2"
+    "react-native-web": "^0.21.2",
+    "write-excel-file": "^4.1.1"
   },
   "devDependencies": {
     "@types/react": "~19.2.2",

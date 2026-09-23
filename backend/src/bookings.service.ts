@@ -602,6 +602,109 @@ export class BookingsService {
     ).rows[0];
     return { apartment, ...result };
   }
+  async subscriptionSummary() {
+    // Aggregate residents into apartments before counting; any paid member wins.
+    // A full summary needs every resident, so a single scan/hash aggregate is
+    // preferable to separate queries per tower or a new maintained totals table.
+    const rows = (
+      await this.db.pool.query<{
+        tower: string;
+        paid: number;
+        unpaid: number;
+        total: number;
+      }>(`
+        WITH apartments AS (
+          SELECT upper(btrim("Block")) AS tower, upper(btrim("Unit No")) AS unit,
+            bool_or(lower(btrim(coalesce("Paid", ''))) = 'paid') AS paid
+          FROM "Resident Master"
+          WHERE nullif(btrim("Block"), '') IS NOT NULL
+            AND nullif(btrim("Unit No"), '') IS NOT NULL
+          GROUP BY 1, 2
+        )
+        SELECT tower, count(*) FILTER (WHERE paid)::int AS paid,
+          count(*) FILTER (WHERE NOT paid)::int AS unpaid, count(*)::int AS total
+        FROM apartments GROUP BY tower
+      `)
+    ).rows;
+    const byTower = new Map(rows.map((row) => [row.tower, row]));
+    const towerNames = [
+      ...new Set([
+        "1",
+        "2",
+        "3",
+        "4",
+        "5",
+        "6",
+        "7",
+        "8",
+        "9",
+        "TH",
+        ...rows.map((row) => row.tower),
+      ]),
+    ].sort((a, b) => a.localeCompare(b, "en", { numeric: true }));
+    const towers = towerNames.map(
+      (tower) => byTower.get(tower) || { tower, paid: 0, unpaid: 0, total: 0 },
+    );
+    const totals = towers.reduce(
+      (sum, row) => ({
+        paid: sum.paid + row.paid,
+        unpaid: sum.unpaid + row.unpaid,
+        total: sum.total + row.total,
+      }),
+      { paid: 0, unpaid: 0, total: 0 },
+    );
+    return { generatedAt: new Date().toISOString(), towers, totals };
+  }
+  async unpaidResidents(input: unknown) {
+    const { towerNumber } = parse(
+      locationSchema.pick({ towerNumber: true }),
+      input,
+    );
+    // Filter one tower once; window flags consider every member before selecting
+    // contacts, so a paid owner also excludes that apartment's unpaid tenant.
+    const result = (
+      await this.db.pool.query(
+        `
+      WITH residents AS (
+        SELECT upper(btrim("Block")) AS block, upper(btrim("Unit No")) AS unit,
+          "Name" AS name, "Intercom" AS intercom,
+          "Membership Status" AS "membershipStatus", "Lives Here" AS "livesHere",
+          "Email id" AS email, "Contact number" AS "contactNumber", "Paid" AS paid,
+          lower(btrim(coalesce("Membership Status", ''))) AS membership,
+          upper(btrim(coalesce("Primary Contact", ''))) AS primary_contact,
+          lower(btrim(coalesce("Paid", ''))) = 'paid' AS is_paid
+        FROM "Resident Master"
+        WHERE upper(btrim("Block")) = $1 AND nullif(btrim("Unit No"), '') IS NOT NULL
+      ), flagged AS (
+        SELECT *, bool_or(is_paid) OVER (PARTITION BY unit) AS apartment_paid,
+          bool_or(membership = 'tenant') OVER (PARTITION BY unit) AS has_tenant
+        FROM residents
+      ), unpaid AS (
+        SELECT * FROM flagged WHERE NOT apartment_paid
+      ), contacts AS (
+        SELECT block, unit, name, intercom, "membershipStatus", "livesHere", email,
+          "contactNumber", paid
+        FROM unpaid WHERE membership = 'tenant'
+          OR (NOT has_tenant AND membership = 'owner' AND primary_contact = 'Y')
+      )
+      SELECT (SELECT count(DISTINCT unit)::int FROM unpaid) AS "unpaidApartments",
+        count(DISTINCT unit)::int AS "contactApartments",
+        coalesce(json_agg(contacts ORDER BY unit, name), '[]'::json) AS contacts
+      FROM contacts
+    `,
+        [towerNumber],
+      )
+    ).rows[0];
+    result.contacts.sort(
+      (
+        a: { unit: string; name: string | null },
+        b: { unit: string; name: string | null },
+      ) =>
+        a.unit.localeCompare(b.unit, "en", { numeric: true }) ||
+        (a.name || "").localeCompare(b.name || ""),
+    );
+    return { towerNumber, generatedAt: new Date().toISOString(), ...result };
+  }
   async collection(input: unknown) {
     const p = parse(
       z.object({ fromDate: dateSchema, toDate: dateSchema }),
