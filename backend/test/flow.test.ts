@@ -1112,3 +1112,39 @@ test("paid and all contact modes apply candidate-specific tenant and primary rul
   assert.equal(empty.apartments, 0);
   assert.deepEqual(empty.contacts, []);
 });
+
+test("paid/all contacts join receipts by tower and unit without multiplying contacts", async () => {
+  await db.pool.query('TRUNCATE "Donations" RESTART IDENTITY');
+  await db.pool.query(`INSERT INTO "Resident Master"
+    ("Block","Unit No","Name","Membership Status","Primary Contact","Paid") VALUES
+    ('1','101','Owner','Owner','Y','Paid'),
+    ('1','101','Tenant','Tenant','N','Paid'),
+    ('1','102','No donation','Owner','Y','Paid'),
+    ('1','103','Unpaid donor','Owner','Y','Unpaid')`);
+  await db.pool
+    .query(`INSERT INTO "Donations" ("Recipt No.","TWR","Apt. No.","NAME","Amount") VALUES
+    (9,'1','101','A',100),(12,' 1 ',' 101 ','B',200),(9,'1','101','Duplicate',100),
+    (888,'2','101','Wrong tower',4000),(777,'1','999','Wrong unit',4000),
+    (50,'1','103','Unpaid donor',4000)`);
+  const paid = await bookings.residentContacts({
+    towerNumber: "1",
+    status: "paid",
+  });
+  assert.equal(paid.contacts.length, 2);
+  assert.equal(paid.apartments, 2);
+  assert.equal(paid.contacts[0].receiptNumbers, "9, 12");
+  assert.equal(paid.contacts[1].receiptNumbers, "");
+  const all = await bookings.residentContacts({
+    towerNumber: "1",
+    status: "all",
+  });
+  assert.equal(all.contacts.length, 3);
+  assert.equal(all.contacts[2].receiptNumbers, "50");
+  assert.equal(all.contacts[2].apartmentStatus, "Unpaid");
+  const unpaid = await bookings.residentContacts({
+    towerNumber: "1",
+    status: "unpaid",
+  });
+  assert.equal(unpaid.contacts.length, 1);
+  assert.equal(unpaid.contacts[0].receiptNumbers, "");
+});

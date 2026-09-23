@@ -699,11 +699,21 @@ export class BookingsService {
         FROM ranked WHERE ($2 = 'paid' AND candidate_count = 1)
           OR membership = 'tenant'
           OR (NOT has_tenant AND primary_contact = 'Y' AND ($2 = 'all' OR membership = 'owner'))
+      ), receipts AS (
+        SELECT upper(btrim("Apt. No.")) AS unit,
+          array_to_string(array_agg(DISTINCT "Recipt No." ORDER BY "Recipt No."), ', ') AS numbers
+        FROM "Donations"
+        WHERE $2 <> 'unpaid' AND upper(btrim("TWR")) = $1
+          AND nullif(btrim("Apt. No."), '') IS NOT NULL
+        GROUP BY 1
+      ), enriched AS (
+        SELECT contacts.*, coalesce(receipts.numbers, '') AS "receiptNumbers"
+        FROM contacts LEFT JOIN receipts USING (unit)
       )
       SELECT (SELECT count(DISTINCT unit)::int FROM candidates) AS "apartments",
         count(DISTINCT unit)::int AS "contactApartments",
-        coalesce(json_agg(contacts ORDER BY unit, name), '[]'::json) AS contacts
-      FROM contacts
+        coalesce(json_agg(enriched ORDER BY unit, name), '[]'::json) AS contacts
+      FROM enriched
     `,
         [towerNumber, status],
       )

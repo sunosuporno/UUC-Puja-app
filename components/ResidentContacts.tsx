@@ -12,7 +12,7 @@ import { Picker } from "@react-native-picker/picker";
 import { callBookingsApi } from "../src/api";
 
 import {
-  residentColumns as columns,
+  residentColumnsForStatus,
   type ResidentReport as Report,
 } from "../src/residentReport";
 import { downloadResidentExcel } from "../src/residentExcel";
@@ -20,6 +20,7 @@ import { downloadResidentExcel } from "../src/residentExcel";
 export function ResidentContacts({ refreshKey }: { refreshKey: number }) {
   const [tower, setTower] = useState("1");
   const [status, setStatus] = useState<Report["status"]>("unpaid");
+  const columns = residentColumnsForStatus(status);
   const [revision, setRevision] = useState(0);
   const [report, setReport] = useState<Report | null>(null);
   const [busy, setBusy] = useState(true);

@@ -1,5 +1,8 @@
 import type { SheetData } from "write-excel-file/universal";
-import { residentColumns, type ResidentReport } from "./residentReport";
+import {
+  residentColumnsForStatus,
+  type ResidentReport,
+} from "./residentReport";
 
 export function residentExcelFilename(report: ResidentReport) {
   const parts = new Intl.DateTimeFormat("en-GB", {
@@ -22,6 +25,7 @@ export async function createResidentExcel(
 ): Promise<Blob> {
   const { default: writeExcelFile } =
     await import("write-excel-file/universal");
+  const residentColumns = residentColumnsForStatus(report.status);
   const data: SheetData = [
     residentColumns.map((column) => ({
       value: column.label,

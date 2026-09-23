@@ -148,3 +148,10 @@ phone numbers and identifiers remain text. No database migration is required.
 All 30 tower/status combinations were independently reconciled against the full
 local Resident Master: 384 Paid + 332 Unpaid = 716 All apartments. This is a local
 snapshot; production reports use production data.
+
+Paid and All contact lists include Receipt number, matched from Donations using
+normalized TWR and Apt. No. Distinct receipt numbers are sorted and grouped per
+apartment before joining, preventing duplicate contact rows. Missing receipts
+stay blank (displayed as an em dash). Unpaid does not display/export this column.
+Excel exports use the same status-dependent columns as the dashboard. No schema
+change is needed.

@@ -8,6 +8,7 @@ export type Contact = {
   email: string | null;
   contactNumber: string | null;
   paid: string | null;
+  receiptNumbers: string;
   apartmentStatus: "Paid" | "Unpaid";
 };
 export type ResidentReport = {
@@ -33,3 +34,12 @@ export const residentColumns: {
   { key: "email", label: "Email id", width: 300 },
   { key: "apartmentStatus", label: "Apartment status", width: 150 },
 ];
+
+export function residentColumnsForStatus(status: ResidentReport["status"]) {
+  return status === "unpaid"
+    ? residentColumns
+    : [
+        ...residentColumns,
+        { key: "receiptNumbers" as const, label: "Receipt number", width: 170 },
+      ];
+}
