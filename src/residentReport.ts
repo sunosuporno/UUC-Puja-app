@@ -8,15 +8,17 @@ export type Contact = {
   email: string | null;
   contactNumber: string | null;
   paid: string | null;
+  apartmentStatus: "Paid" | "Unpaid";
 };
-export type UnpaidReport = {
+export type ResidentReport = {
   towerNumber: string;
   generatedAt: string;
-  unpaidApartments: number;
+  status: "unpaid" | "paid" | "all";
+  apartments: number;
   contactApartments: number;
   contacts: Contact[];
 };
-export const unpaidColumns: {
+export const residentColumns: {
   key: keyof Contact;
   label: string;
   width: number;
@@ -24,10 +26,10 @@ export const unpaidColumns: {
   { key: "block", label: "Block", width: 75 },
   { key: "unit", label: "Unit No", width: 100 },
   { key: "name", label: "Name", width: 260 },
+  { key: "contactNumber", label: "Contact number", width: 175 },
   { key: "intercom", label: "Intercom", width: 110 },
   { key: "membershipStatus", label: "Membership Status", width: 175 },
   { key: "livesHere", label: "Lives Here", width: 105 },
   { key: "email", label: "Email id", width: 300 },
-  { key: "contactNumber", label: "Contact number", width: 175 },
-  { key: "paid", label: "Paid", width: 110 },
+  { key: "apartmentStatus", label: "Apartment status", width: 150 },
 ];

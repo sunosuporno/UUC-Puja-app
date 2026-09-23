@@ -127,19 +127,24 @@ must inspect the source rows; on 1,102 local resident rows the query took about
 384 paid / 332 unpaid / 716 apartments, reconciled independently from the source
 rows. The live spreadsheet can differ from the local snapshot.
 
-### Unpaid apartment contacts
+### Apartment contacts and Excel export
 
-Below the subscription summary, admins can select tower 1–9 or TH to load
-`getUnpaidResidents`. A single parameterized SQL query first checks all members
-of each apartment for Paid, then selects exact Tenant memberships. If none exist,
-it selects exact Owner memberships with Primary Contact Y. Comparisons ignore
-case and surrounding whitespace; Owner Family and Tenant Family do not qualify.
-All qualifying rows are returned rather than arbitrarily discarding contacts.
-Apartments without a qualifying contact are counted and flagged in the UI.
+Below the subscription summary, admins select a tower and Unpaid, Paid, or All.
+The admin-only `getResidentContacts` action uses one parameterized SQL query.
+Unpaid retains tenant-first selection, then Owner + Primary Contact Y. Paid
+considers only Paid members: return a sole paid member directly; for multiple
+paid members, prefer Tenant rows, otherwise primary Owners. All considers every
+apartment, preferring Tenant rows, otherwise Primary Contact Y of any membership.
+All qualifying rows are retained, and apartments with no qualifying contact are
+counted and flagged. The legacy `getUnpaidResidents` action remains compatible.
 
-The table preserves source contact fields, sorts units naturally, and scrolls
-horizontally on narrow screens. Changing towers clears the old results and ignores
-late responses; summary Refresh also refreshes the contact table. Access requires
-an admin session. No migration or additional Neon index is needed at the current
-size: full local-data reconciliation passed for all ten towers, with the Tower 9
-query taking about 1.2 ms locally. No source records were modified.
+Payment eligibility is calculated across all members before selecting contacts.
+Comparisons ignore case and outer whitespace. The table and Excel export show Apartment status, indicating whether any
+member is Paid, with Contact number immediately after Name. Individual resident
+payment values remain unchanged in the database. Switching either filter clears stale rows and exports. Excel downloads
+contain the current selection, with status/tower/IST timestamp in the filename;
+phone numbers and identifiers remain text. No database migration is required.
+
+All 30 tower/status combinations were independently reconciled against the full
+local Resident Master: 384 Paid + 332 Unpaid = 716 All apartments. This is a local
+snapshot; production reports use production data.

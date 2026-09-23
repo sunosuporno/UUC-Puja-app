@@ -7,7 +7,7 @@ import {
   Text,
   View,
 } from "react-native";
-import { UnpaidResidents } from "./UnpaidResidents";
+import { ResidentContacts } from "./ResidentContacts";
 import { callBookingsApi } from "../src/api";
 
 type Counts = { paid: number; unpaid: number; total: number };
@@ -148,7 +148,7 @@ export function SubscriptionDashboard() {
           </Text>
         </>
       )}
-      <UnpaidResidents refreshKey={revision} />
+      <ResidentContacts refreshKey={revision} />
     </View>
   );
 }

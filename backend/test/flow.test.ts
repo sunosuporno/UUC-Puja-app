@@ -1040,3 +1040,75 @@ test("unpaid contacts prefer tenants, fall back to primary owners, and exclude a
   assert.equal(refreshed.unpaidApartments, 5);
   assert.ok(refreshed.contacts.every((r: any) => r.unit !== "101"));
 });
+
+test("paid and all contact modes apply candidate-specific tenant and primary rules", async () => {
+  await db.pool.query(`INSERT INTO "Resident Master"
+    ("Block","Unit No","Name","Membership Status","Primary Contact","Paid") VALUES
+    ('1','101','Sole paid nonprimary','Owner','N','Paid'),
+    ('1','101','Unpaid tenant','Tenant','N','Unpaid'),
+    ('1','102','Paid owner ignored','Owner','Y','Paid'),
+    ('1','102','Paid tenant','Tenant','N',' paid '),
+    ('1','102','Unpaid tenant 2','Tenant','Y','Unpaid'),
+    ('1','103','Paid primary owner','Owner','Y','Paid'),
+    ('1','103','Paid other owner','Owner','N','Paid'),
+    ('1','104','Unpaid primary','Owner','Y','Unpaid'),
+    ('1','105','Sole paid family','Owner Family','N','Paid'),
+    ('1','106','All primary family','Owner Family','Y','Unpaid'),
+    ('1','107','No primary A','Owner','N','Paid'),
+    ('1','107','No primary B','Owner','N','Paid'),
+    ('2','101','Wrong tower','Tenant','Y','Paid')`);
+  const paid = await bookings.residentContacts({
+    towerNumber: "1",
+    status: "paid",
+  });
+  assert.equal(paid.apartments, 5);
+  assert.equal(paid.contactApartments, 4);
+  assert.deepEqual(
+    paid.contacts.map((r: any) => r.name),
+    [
+      "Sole paid nonprimary",
+      "Paid tenant",
+      "Paid primary owner",
+      "Sole paid family",
+    ],
+  );
+  assert.ok(paid.contacts.every((r: any) => r.apartmentStatus === "Paid"));
+  const all = await bookings.residentContacts({
+    towerNumber: "1",
+    status: "all",
+  });
+  assert.equal(all.apartments, 7);
+  assert.equal(all.contactApartments, 5);
+  assert.deepEqual(
+    all.contacts.map((r: any) => r.name),
+    [
+      "Unpaid tenant",
+      "Paid tenant",
+      "Unpaid tenant 2",
+      "Paid primary owner",
+      "Unpaid primary",
+      "All primary family",
+    ],
+  );
+  assert.equal(all.contacts[0].paid, "Unpaid");
+  assert.equal(all.contacts[0].apartmentStatus, "Paid");
+  const unpaid = await bookings.residentContacts({
+    towerNumber: "1",
+    status: "unpaid",
+  });
+  assert.equal(unpaid.apartments, 2);
+  assert.deepEqual(
+    unpaid.contacts.map((r: any) => r.name),
+    ["Unpaid primary"],
+  );
+  assert.equal(paid.apartments + unpaid.apartments, all.apartments);
+  await assert.rejects(
+    bookings.residentContacts({ towerNumber: "1", status: "invalid" }),
+  );
+  const empty = await bookings.residentContacts({
+    towerNumber: "TH",
+    status: "paid",
+  });
+  assert.equal(empty.apartments, 0);
+  assert.deepEqual(empty.contacts, []);
+});

@@ -656,8 +656,14 @@ export class BookingsService {
     return { generatedAt: new Date().toISOString(), towers, totals };
   }
   async unpaidResidents(input: unknown) {
-    const { towerNumber } = parse(
-      locationSchema.pick({ towerNumber: true }),
+    const report = await this.residentContacts(input);
+    return { ...report, unpaidApartments: report.apartments };
+  }
+  async residentContacts(input: unknown) {
+    const { towerNumber, status } = parse(
+      locationSchema.pick({ towerNumber: true }).extend({
+        status: z.enum(["unpaid", "paid", "all"]).default("unpaid"),
+      }),
       input,
     );
     // Filter one tower once; window flags consider every member before selecting
@@ -676,23 +682,30 @@ export class BookingsService {
         FROM "Resident Master"
         WHERE upper(btrim("Block")) = $1 AND nullif(btrim("Unit No"), '') IS NOT NULL
       ), flagged AS (
-        SELECT *, bool_or(is_paid) OVER (PARTITION BY unit) AS apartment_paid,
-          bool_or(membership = 'tenant') OVER (PARTITION BY unit) AS has_tenant
+        SELECT *, bool_or(is_paid) OVER (PARTITION BY unit) AS apartment_paid
         FROM residents
-      ), unpaid AS (
-        SELECT * FROM flagged WHERE NOT apartment_paid
+      ), candidates AS (
+        SELECT * FROM flagged
+        WHERE $2 = 'all' OR ($2 = 'unpaid' AND NOT apartment_paid)
+          OR ($2 = 'paid' AND is_paid)
+      ), ranked AS (
+        SELECT *, count(*) OVER (PARTITION BY unit) AS candidate_count,
+          bool_or(membership = 'tenant') OVER (PARTITION BY unit) AS has_tenant
+        FROM candidates
       ), contacts AS (
         SELECT block, unit, name, intercom, "membershipStatus", "livesHere", email,
-          "contactNumber", paid
-        FROM unpaid WHERE membership = 'tenant'
-          OR (NOT has_tenant AND membership = 'owner' AND primary_contact = 'Y')
+          "contactNumber", paid,
+          CASE WHEN apartment_paid THEN 'Paid' ELSE 'Unpaid' END AS "apartmentStatus"
+        FROM ranked WHERE ($2 = 'paid' AND candidate_count = 1)
+          OR membership = 'tenant'
+          OR (NOT has_tenant AND primary_contact = 'Y' AND ($2 = 'all' OR membership = 'owner'))
       )
-      SELECT (SELECT count(DISTINCT unit)::int FROM unpaid) AS "unpaidApartments",
+      SELECT (SELECT count(DISTINCT unit)::int FROM candidates) AS "apartments",
         count(DISTINCT unit)::int AS "contactApartments",
         coalesce(json_agg(contacts ORDER BY unit, name), '[]'::json) AS contacts
       FROM contacts
     `,
-        [towerNumber],
+        [towerNumber, status],
       )
     ).rows[0];
     result.contacts.sort(
@@ -703,7 +716,12 @@ export class BookingsService {
         a.unit.localeCompare(b.unit, "en", { numeric: true }) ||
         (a.name || "").localeCompare(b.name || ""),
     );
-    return { towerNumber, generatedAt: new Date().toISOString(), ...result };
+    return {
+      towerNumber,
+      status,
+      generatedAt: new Date().toISOString(),
+      ...result,
+    };
   }
   async collection(input: unknown) {
     const p = parse(

@@ -12,13 +12,14 @@ import { Picker } from "@react-native-picker/picker";
 import { callBookingsApi } from "../src/api";
 
 import {
-  unpaidColumns as columns,
-  type UnpaidReport as Report,
-} from "../src/unpaidReport";
-import { downloadUnpaidExcel } from "../src/unpaidExcel";
+  residentColumns as columns,
+  type ResidentReport as Report,
+} from "../src/residentReport";
+import { downloadResidentExcel } from "../src/residentExcel";
 
-export function UnpaidResidents({ refreshKey }: { refreshKey: number }) {
+export function ResidentContacts({ refreshKey }: { refreshKey: number }) {
   const [tower, setTower] = useState("1");
+  const [status, setStatus] = useState<Report["status"]>("unpaid");
   const [revision, setRevision] = useState(0);
   const [report, setReport] = useState<Report | null>(null);
   const [busy, setBusy] = useState(true);
@@ -32,7 +33,8 @@ export function UnpaidResidents({ refreshKey }: { refreshKey: number }) {
     setExportError("");
     setReport(null);
     void callBookingsApi<{ report: Report }>({
-      action: "getUnpaidResidents",
+      action: "getResidentContacts",
+      status,
       towerNumber: tower,
     })
       .then((result) => {
@@ -41,7 +43,9 @@ export function UnpaidResidents({ refreshKey }: { refreshKey: number }) {
       .catch((e) => {
         if (active)
           setError(
-            e instanceof Error ? e.message : "Unable to load unpaid residents.",
+            e instanceof Error
+              ? e.message
+              : "Unable to load resident contacts.",
           );
       })
       .finally(() => {
@@ -50,14 +54,15 @@ export function UnpaidResidents({ refreshKey }: { refreshKey: number }) {
     return () => {
       active = false;
     };
-  }, [tower, revision, refreshKey]);
-  const current = report?.towerNumber === tower ? report : null;
+  }, [tower, status, revision, refreshKey]);
+  const current =
+    report?.towerNumber === tower && report.status === status ? report : null;
   async function exportExcel() {
     if (!current || busy || exporting || !current.contacts.length) return;
     setExporting(true);
     setExportError("");
     try {
-      await downloadUnpaidExcel(current);
+      await downloadResidentExcel(current);
     } catch {
       setExportError("Unable to download Excel. Please try again.");
     } finally {
@@ -66,17 +71,20 @@ export function UnpaidResidents({ refreshKey }: { refreshKey: number }) {
   }
   return (
     <View style={s.section}>
-      <Text style={s.title}>Unpaid apartment contacts</Text>
+      <Text style={s.title}>Apartment contacts</Text>
       <Text style={s.note}>
-        Tenants are shown first. Where no tenant is listed, only owners marked
-        as the primary contact are shown. Apartments with any Paid member are
-        excluded.
+        {status === "paid"
+          ? "Only paid apartments. A sole Paid member is selected directly; among multiple Paid members, tenants take priority over primary owners."
+          : status === "all"
+            ? "All apartments. Tenant contacts take priority; otherwise primary contacts are shown."
+            : "Only unpaid apartments. Tenant contacts take priority; otherwise primary owners are shown."}{" "}
+        Apartment status is Paid if any member is marked Paid.
       </Text>
       <View style={s.toolbar}>
         <View style={s.field}>
           <Text style={s.label}>Tower</Text>
           <Picker
-            accessibilityLabel="Unpaid residents tower"
+            accessibilityLabel="Resident contacts tower"
             selectedValue={tower}
             onValueChange={setTower}
             style={s.picker}
@@ -88,6 +96,19 @@ export function UnpaidResidents({ refreshKey }: { refreshKey: number }) {
                 value={t}
               />
             ))}
+          </Picker>
+        </View>
+        <View style={s.field}>
+          <Text style={s.label}>Payment status</Text>
+          <Picker
+            accessibilityLabel="Resident payment status"
+            selectedValue={status}
+            onValueChange={(value) => setStatus(value)}
+            style={s.picker}
+          >
+            <Picker.Item label="Unpaid" value="unpaid" />
+            <Picker.Item label="Paid" value="paid" />
+            <Picker.Item label="All" value="all" />
           </Picker>
         </View>
         <Pressable
@@ -130,15 +151,15 @@ export function UnpaidResidents({ refreshKey }: { refreshKey: number }) {
       )}
       {busy && (
         <ActivityIndicator
-          accessibilityLabel="Loading unpaid residents"
+          accessibilityLabel="Loading resident contacts"
           color="#7C1D19"
         />
       )}
       {current && (
         <>
           <Text style={s.count}>
-            {current.unpaidApartments} unpaid apartments ·{" "}
-            {current.contacts.length} contacts across{" "}
+            {current.apartments} {status === "all" ? "total" : status}{" "}
+            apartments · {current.contacts.length} contacts across{" "}
             {current.contactApartments} apartments
           </Text>
           <Text style={s.note}>
@@ -150,11 +171,11 @@ export function UnpaidResidents({ refreshKey }: { refreshKey: number }) {
             })}{" "}
             IST
           </Text>
-          {current.unpaidApartments > current.contactApartments && (
+          {current.apartments > current.contactApartments && (
             <Text style={s.notice}>
-              {current.unpaidApartments - current.contactApartments} unpaid
-              apartment(s) have no Tenant or primary Owner contact. Check their
-              Resident Master records.
+              {current.apartments - current.contactApartments} apartment(s) have
+              no contact matching this selection. Check their Resident Master
+              records.
             </Text>
           )}
           {current.contacts.length ? (
@@ -190,9 +211,9 @@ export function UnpaidResidents({ refreshKey }: { refreshKey: number }) {
             </ScrollView>
           ) : (
             <Text style={s.note}>
-              {current.unpaidApartments
+              {current.apartments
                 ? "No matching contacts for this tower."
-                : "No unpaid apartments in this tower."}
+                : "No apartments match this status in this tower."}
             </Text>
           )}
         </>
