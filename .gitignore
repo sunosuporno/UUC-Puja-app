@@ -46,3 +46,5 @@ codegs.md
 backend/data/
 backend/.postgres/
 backend/.pgsocket/
+
+*.dump

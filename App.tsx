@@ -268,6 +268,16 @@ const displayFullDate = (value: string) => {
   return `${Number(match[3])} ${month} ${match[1]}`;
 };
 
+const displayTimestampInKolkata = (value: string) => {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return `${date.toLocaleString("en-IN", {
+    dateStyle: "medium",
+    timeStyle: "short",
+    timeZone: "Asia/Kolkata",
+  })} IST`;
+};
+
 const dateInputValueInKolkata = (date = new Date()) => {
   const parts = new Intl.DateTimeFormat("en-GB", {
     day: "2-digit",
@@ -299,12 +309,7 @@ const isPastEventDate = (value: string, today = new Date()) => {
     return false;
   }
 
-  const currentDate = new Date(
-    today.getFullYear(),
-    today.getMonth(),
-    today.getDate()
-  );
-  return eventDate.getTime() < currentDate.getTime();
+  return value < dateInputValueInKolkata(today);
 };
 
 function normalizeSeasonPassConfig(
@@ -489,7 +494,7 @@ function CollectionBookingsTable({
                 </Text>
               </Pressable>
               <Text style={[styles.collectionTableText, styles.collectionCreatedCell]}>
-                {row.createdAt}
+                {displayTimestampInKolkata(row.createdAt)}
               </Text>
               <Text style={[styles.collectionTableText, styles.collectionApartmentCell]}>
                 {row.apartmentNumber}
@@ -1792,10 +1797,7 @@ export default function App() {
         ? collectionReport?.generatedAt
         : adminSummary?.generatedAt;
     const updatedAt = activeGeneratedAt
-      ? new Date(activeGeneratedAt).toLocaleString("en-IN", {
-          dateStyle: "medium",
-          timeStyle: "short",
-        })
+      ? displayTimestampInKolkata(activeGeneratedAt)
       : "";
     const totalCards = totals
       ? [
@@ -2187,7 +2189,7 @@ export default function App() {
                   </Text>
                 </View>
                 <View style={styles.manageMetaBlock}>
-                  <Text style={styles.manageMeta}>{booking.createdAt}</Text>
+                  <Text style={styles.manageMeta}>{displayTimestampInKolkata(booking.createdAt)}</Text>
                   <Text style={styles.manageMeta}>
                     {booking.paymentMethod} · {currency(booking.payableAmount)}
                   </Text>

@@ -20,7 +20,7 @@ export class SmsService {
       const dailyLimit = Number(process.env.SMS_DAILY_LIMIT || 100);
       const used = (
         await c.query(
-          `SELECT count(*)::int AS n FROM "Bookings" WHERE ("SMS Status"->>'claimedAt')::timestamptz >= date_trunc('day',now())`,
+          `SELECT count(*)::int AS n FROM "Bookings" WHERE ("SMS Status"->>'claimedAt')::timestamptz >= (date_trunc('day', now() AT TIME ZONE 'Asia/Kolkata') AT TIME ZONE 'Asia/Kolkata')`,
         )
       ).rows[0].n;
       if (

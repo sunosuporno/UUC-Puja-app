@@ -45,12 +45,12 @@ There are exactly five application tables, with every named source column preser
 | Bookings | 12 | 0 |
 | Booking Items | 12 | 0 |
 | Food Menu | 9 | 18 |
-| Donations | 8 | 543 |
-| Resident Master | 12 | 1,102 |
+| Donations | 9 | 543 |
+| Resident Master | 13 | 1,102 |
 
-The blank unnamed leading Donations column is not a database column. Pre-numbered donation placeholders and duplicate receipt numbers are preserved, so `Recipt No.` deliberately is not unique. Imported donation total: ₹1,619,509.00. Source Season Pass price is ₹1,200.
+The blank unnamed leading Donations column is not a database column. Donations and Resident Master now have an additional generated `id` primary key for database-editor updates/deletes. The repeatable migration preserves existing IDs, including those added manually in Neon. Pre-numbered donation placeholders and duplicate receipt numbers are preserved, so `Recipt No.` deliberately is not unique. Imported donation total: ₹1,619,509.00. Source Season Pass price is ₹1,200.
 
-Bookings renames: `WhatsApp Number` → `Phone Number`, `WhatsApp Status` → `SMS Status`, `WhatsApp Message ID` → `SMS Request ID`, `WhatsApp Sent At` → `SMS Sent At`. Phone numbers are normalized with the country prefix. `SMS Status` is JSONB: it holds notification state/errors plus request IDs, replay results, and customer name. This keeps the requested table/column count, at the cost of combining operational metadata in this column. Booking item IDs derive from the existing composite key rather than spreadsheet row positions.
+Bookings renames: `WhatsApp Number` → `Phone Number`, `WhatsApp Status` → `SMS Status`, `WhatsApp Message ID` → `SMS Request ID`, `WhatsApp Sent At` → `SMS Sent At`. Phone numbers are normalized with the country prefix. `SMS Status` is JSONB: it holds notification state/errors plus request IDs, replay results, and customer name. This keeps the Bookings column count, at the cost of combining operational metadata in this column. Booking item IDs derive from the existing composite key rather than spreadsheet row positions.
 
 The exact SQL definitions are in `sql/001-schema.sql`. Dates/prices have database types and constraints; money calculations use integer paise. Booking dates and report boundaries use Asia/Kolkata.
 

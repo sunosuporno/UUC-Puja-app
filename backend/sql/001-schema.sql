@@ -67,8 +67,35 @@ CREATE TABLE IF NOT EXISTS "Resident Master" (
 );
 CREATE INDEX IF NOT EXISTS residents_apartment ON "Resident Master" ("Block", "Unit No");
 
--- Receipt numbers are duplicated in the source workbook; retain those rows.
-ALTER TABLE "Donations" DROP CONSTRAINT IF EXISTS "Donations_pkey";
+-- Only remove the legacy receipt-number primary key, never the new id key.
+-- Receipt numbers are duplicated in the source workbook; retain those values.
+DO $$
+DECLARE
+  receipt_key text;
+BEGIN
+  SELECT c.conname INTO receipt_key
+  FROM pg_constraint c
+  JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attname = 'Recipt No.'
+  WHERE c.conrelid = '"Donations"'::regclass
+    AND c.contype = 'p' AND c.conkey = ARRAY[a.attnum];
+  IF receipt_key IS NOT NULL THEN
+    EXECUTE format('ALTER TABLE "Donations" DROP CONSTRAINT %I', receipt_key);
+  END IF;
+END $$;
+
+-- Separate row identifiers support database-editor updates/deletes.
+-- Existing ids (including ones added manually in Neon) are preserved on reruns.
+ALTER TABLE "Donations" ADD COLUMN IF NOT EXISTS "id" bigint GENERATED ALWAYS AS IDENTITY;
+ALTER TABLE "Resident Master" ADD COLUMN IF NOT EXISTS "id" bigint GENERATED ALWAYS AS IDENTITY;
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid = '"Donations"'::regclass AND contype = 'p') THEN
+    ALTER TABLE "Donations" ADD PRIMARY KEY ("id");
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid = '"Resident Master"'::regclass AND contype = 'p') THEN
+    ALTER TABLE "Resident Master" ADD PRIMARY KEY ("id");
+  END IF;
+END $$;
 CREATE INDEX IF NOT EXISTS donation_receipt ON "Donations" ("Recipt No.");
 
 ALTER TABLE "Donations" ALTER COLUMN "Amount" DROP NOT NULL;
