@@ -38,8 +38,9 @@ export const residentColumns: {
 export function residentColumnsForStatus(status: ResidentReport["status"]) {
   return status === "unpaid"
     ? residentColumns
-    : [
-        ...residentColumns,
-        { key: "receiptNumbers" as const, label: "Receipt number", width: 170 },
-      ];
+    : residentColumns.flatMap((column) =>
+        column.key === "contactNumber"
+          ? [column, { key: "receiptNumbers" as const, label: "Receipt number", width: 170 }]
+          : [column],
+      );
 }
