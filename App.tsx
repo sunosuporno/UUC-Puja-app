@@ -1,4 +1,6 @@
 import { callBookingsApi, hasAdminToken } from "./src/api";
+import { ContributionDashboard } from "./components/ContributionDashboard";
+import { ContributionForm } from "./components/ContributionForm";
 import { AdminAccess } from "./components/AdminAccess";
 import { SubscriptionDashboard } from "./components/SubscriptionDashboard";
 import { ApartmentCoupons } from "./components/ApartmentCoupons";
@@ -43,6 +45,7 @@ type SeasonPassConfig = {
   description: string;
 };
 type Screen =
+  | "contribution"
   | "phone"
   | "booking"
   | "manage"
@@ -155,7 +158,7 @@ type AdminSummaryResponse = {
   summary?: AdminSummary;
   error?: string;
 };
-type AdminDashboardView = 2 | 3 | 4 | 5;
+type AdminDashboardView = 2 | 3 | 4 | 5 | 6;
 type CollectionBooking = {
   bookingReference: string;
   createdAt: string;
@@ -182,6 +185,7 @@ const ADMIN_DASHBOARD_LABELS: Record<AdminDashboardView, string> = {
   3: "Bookings",
   4: "Apartment coupons",
   5: "Subscriptions",
+  6: "Donations & sponsorships",
 };
 
 const MAX_QUANTITY = 15;
@@ -552,6 +556,11 @@ export default function App() {
   >(null);
   const [donationRecordMissing, setDonationRecordMissing] = useState(false);
   const [donationSelected, setDonationSelected] = useState(false);
+  const [customDonationAmount, setCustomDonationAmount] = useState("");
+  const donationAmount = customDonationAmount.trim() === "" ? DONATION_AMOUNT : Number(customDonationAmount);
+  const isDonationAmountValid = customDonationAmount.trim() === "" ||
+    (/^\d+(?:\.\d{1,2})?$/.test(customDonationAmount.trim()) &&
+      donationAmount >= DONATION_AMOUNT && donationAmount <= 10000000);
   const [donationDeclined, setDonationDeclined] = useState(false);
   const [donorName, setDonorName] = useState("");
   const [donationReceiptNumber, setDonationReceiptNumber] = useState("");
@@ -689,7 +698,7 @@ export default function App() {
   const passDaySummary = (day: string) => `${day}: ${activeSeasonPasses - passTakeawayQuantity(day)} dine-in, ${passTakeawayQuantity(day)} takeaway`;
   const seasonTakeawayExtra = seasonPassLunchDays.reduce((sum, day) => sum + passTakeawayQuantity(day) * 30, 0);
   const couponTotal = activeSeasonPasses * currentSeasonPassPrice + seasonTakeawayExtra + granularTotal;
-  const total = couponTotal + (donationSelected ? DONATION_AMOUNT : 0);
+  const total = couponTotal + (donationSelected ? donationAmount : 0);
   const individualBookingItems: BookingItemPayload[] = days
     .flatMap((day) =>
       day.meals.flatMap((meal) => {
@@ -762,9 +771,9 @@ export default function App() {
       ? [
           {
             id: "pujo-donation",
-            label: "Pujo donation",
+            label: "Pujo subscription",
             quantity: 1,
-            subtotal: DONATION_AMOUNT,
+            subtotal: donationAmount,
           },
         ]
       : []),
@@ -795,7 +804,7 @@ export default function App() {
     (sum, item) => sum + item.subtotal,
     0
   );
-  const paymentTotal = paymentPurpose === "upgrade" ? upgradeTotal : paymentPurpose === "donation" ? DONATION_AMOUNT : total;
+  const paymentTotal = paymentPurpose === "upgrade" ? upgradeTotal : paymentPurpose === "donation" ? donationAmount : total;
   const paymentItems =
     paymentPurpose === "upgrade" ? selectedUpgradeItems : paymentPurpose === "donation" ? selectedItems.filter(item => item.id === "pujo-donation") : selectedItems;
   const cashAmountValue = Number(cashAmount.replace(/,/g, "").trim());
@@ -830,7 +839,7 @@ export default function App() {
     .filter((detail): detail is string => detail !== null);
   const bookingDetails = [
     donationSelected
-      ? `Pujo donation x 1 (${currency(DONATION_AMOUNT)})`
+      ? `Pujo subscription x 1 (${currency(donationAmount)})`
       : null,
     activeSeasonPasses > 0 ? `Season pass x ${activeSeasonPasses}: ${seasonPassLunchDays.map(passDaySummary).join(", ")}` : null,
     ...mealBookingDetails,
@@ -839,7 +848,7 @@ export default function App() {
     .join("; ");
   const selectionSummary =
     [
-      donationSelected ? "Pujo donation" : null,
+      donationSelected ? "Pujo subscription" : null,
       activeSeasonPasses > 0
         ? `${activeSeasonPasses} season ${activeSeasonPasses === 1 ? "pass" : "passes"}`
         : null,
@@ -856,7 +865,7 @@ export default function App() {
   )}&cu=INR&tn=${encodeURIComponent(
     paymentPurpose === "upgrade"
       ? "UUC Pujo takeaway upgrade"
-      : paymentPurpose === "donation" ? "UUC Pujo donation" : "UUC Pujo food coupons"
+      : paymentPurpose === "donation" ? "UUC Pujo subscription" : "UUC Pujo food coupons"
   )}`;
 
   const changeSeasonPasses = (next: number) => {
@@ -894,6 +903,7 @@ export default function App() {
 
     setDonationRecordMissing(false);
     setDonationSelected(false);
+    setCustomDonationAmount("");
     setDonationDeclined(false);
     setEligibilityError("");
     setManageError("");
@@ -1079,9 +1089,13 @@ export default function App() {
   };
 
   const validateDonationReceipt = () => {
+    if (paymentPurpose !== "upgrade" && donationSelected && !isDonationAmountValid) {
+      setBookingSubmissionError("Enter a subscription of at least Rs. 4,000 with up to two decimal places.");
+      return false;
+    }
     if (paymentPurpose !== "upgrade" && donationSelected &&
       (!/^[0-9]{1,15}$/.test(donationReceiptNumber.trim()) || Number(donationReceiptNumber) <= 0)) {
-      setBookingSubmissionError("Enter a valid Pujo donation receipt number (up to 15 digits).");
+      setBookingSubmissionError("Enter a valid Pujo subscription receipt number (up to 15 digits).");
       return false;
     }
     return true;
@@ -1144,7 +1158,7 @@ export default function App() {
         bookingDetails,
         bookingItems: paymentPurpose === "donation" ? [] : bookingItems,
         donation: donationSelected
-          ? { name: donorName, amount: DONATION_AMOUNT, receiptNumber: donationReceiptNumber.trim() }
+          ? { name: donorName, amount: donationAmount, receiptNumber: donationReceiptNumber.trim() }
           : null,
       });
 
@@ -1247,6 +1261,7 @@ export default function App() {
     setPhoneNumber("");
     setDonationRecordMissing(false);
     setDonationSelected(false);
+    setCustomDonationAmount("");
     setDonationDeclined(false);
     setDonorName("");
     setDonationReceiptNumber("");
@@ -1286,6 +1301,8 @@ export default function App() {
     setScreen("phone");
   };
 
+  if (screen === "contribution") return <ContributionForm onBack={() => setScreen("phone")} />;
+
   if (screen === "admin-login") return <AdminAccess onSignedIn={() => { setScreen("admin"); void loadAdminSummary(); }} onBack={() => setScreen("phone")} />;
   if (screen === "admin-menu") return <MenuAdmin onBack={() => setScreen("admin")} onChanged={() => setMenuRevision(v => v + 1)} />;
 
@@ -1297,6 +1314,7 @@ export default function App() {
       canLocateApartment && isValidPhoneNumber(phoneNumber);
     const canContinueWithDonation =
       donationSelected &&
+      isDonationAmountValid &&
       canLocateApartment &&
       isValidDonorName(donorName) &&
       isValidPhoneNumber(phoneNumber);
@@ -1312,6 +1330,7 @@ export default function App() {
 
       setDonationRecordMissing(false);
       setDonationSelected(false);
+      setCustomDonationAmount("");
       setDonationDeclined(false);
       setEligibilityError("");
       setIsCheckingEligibility(true);
@@ -1327,7 +1346,7 @@ export default function App() {
           !result.ok ||
           typeof result.eligible !== "boolean"
         ) {
-          throw new Error(result.error || "Unable to check donation records.");
+          throw new Error(result.error || "Unable to check subscription records.");
         }
 
         if (result.eligible) {
@@ -1339,7 +1358,7 @@ export default function App() {
         setEligibilityError(
           error instanceof Error
             ? error.message
-            : "Unable to check donation records."
+            : "Unable to check subscription records."
         );
       } finally {
         setIsCheckingEligibility(false);
@@ -1440,6 +1459,7 @@ export default function App() {
                           setTowerNumber(value);
                           setDonationRecordMissing(false);
                           setDonationSelected(false);
+                          setCustomDonationAmount("");
                           setDonationDeclined(false);
                           setDonorName("");
     setDonationReceiptNumber("");
@@ -1493,6 +1513,7 @@ export default function App() {
                           setApartmentNumber(value.slice(0, APARTMENT_NUMBER_MAX_LENGTH));
                           setDonationRecordMissing(false);
                           setDonationSelected(false);
+                          setCustomDonationAmount("");
                           setDonationDeclined(false);
                           setDonorName("");
     setDonationReceiptNumber("");
@@ -1564,30 +1585,55 @@ export default function App() {
                   ) : null}
                 </View>
                 <Text style={styles.phoneHint}>
-                  We will check your Pujo donation status before booking and
+                  We will check your Pujo subscription status before booking and
                   send your booking confirmation by SMS.
                 </Text>
                 {donationRecordMissing ? (
                   <View>
                     <View style={styles.notFoundMessage}>
                       <Text style={styles.notFoundTitle}>
-                        No donation records found.
+                        No subscription records found.
                       </Text>
                       <Text style={styles.notFoundText}>
-                        Would you like to make the Pujo donation now? You can pay it on its own or book coupons together.
+                        Would you like to make the Pujo subscription now? You can pay it on its own or book coupons together.
                       </Text>
                     </View>
+                    {!donationDeclined && (
+                      <View style={donationStyles.selectedDonation}>
+                        <Text style={styles.phoneCardLabel}>SUBSCRIPTION AMOUNT (OPTIONAL)</Text>
+                        <TextInput
+                          accessibilityLabel="Subscription amount"
+                          value={customDonationAmount}
+                          onChangeText={setCustomDonationAmount}
+                          keyboardType="decimal-pad"
+                          placeholder="4,000"
+                          placeholderTextColor="#B68473"
+                          maxLength={11}
+                          style={[styles.phoneInput, inputWebStyle]}
+                        />
+                        <Text style={donationStyles.donationBody}>
+                          Leave blank to pay Rs. 4,000, or enter a higher total subscription amount.
+                        </Text>
+                        {!isDonationAmountValid && (
+                          <Text style={locationStyles.validationText}>
+                            Enter Rs. 4,000–1,00,00,000 with up to two decimal places.
+                          </Text>
+                        )}
+                      </View>
+                    )}
                     {!donationSelected && !donationDeclined ? (
                       <View style={donationStyles.choiceRow}>
                         <Pressable
                           onPress={() => setDonationSelected(true)}
+                          disabled={!isDonationAmountValid}
                           style={({ pressed }) => [
                             donationStyles.addButton,
+                            !isDonationAmountValid && styles.secondaryActionButtonDisabled,
                             pressed && styles.pressed,
                           ]}
                         >
                           <Text style={donationStyles.addButtonText}>
-                            Yes, add {currency(DONATION_AMOUNT)}
+                            {isDonationAmountValid ? `Yes, add ${currency(donationAmount)}` : "Yes, add subscription"}
                           </Text>
                         </Pressable>
                         <Pressable
@@ -1606,10 +1652,10 @@ export default function App() {
                     {donationSelected ? (
                       <View style={donationStyles.selectedDonation}>
                         <Text style={donationStyles.donationTitle}>
-                          Pujo donation added
+                          Pujo subscription added
                         </Text>
                         <Text style={donationStyles.donationBody}>
-                          {currency(DONATION_AMOUNT)} donation. Enter your name, then continue to coupons or pay the donation on its own.
+                          Enter your name, then continue to coupons or pay the subscription on its own.
                         </Text>
                         <Text style={styles.phoneCardLabel}>YOUR NAME</Text>
                         <TextInput
@@ -1642,7 +1688,7 @@ export default function App() {
                     ) : null}
                     {donationDeclined ? (
                       <Text style={donationStyles.declinedText}>
-                        A Pujo donation record is required before food coupons
+                        A Pujo subscription record is required before food coupons
                         can be booked.
                       </Text>
                     ) : null}
@@ -1732,7 +1778,7 @@ export default function App() {
                   }}
                   style={({ pressed }) => [styles.secondaryActionButton, (shouldStackHomeActions || (isPhoneWidth && donationSelected)) && styles.stackedActionButton, !canContinueWithDonation && styles.secondaryActionButtonDisabled, pressed && styles.pressed]}
                 >
-                  <Text style={styles.secondaryActionButtonText}>Pay donation only</Text>
+                  <Text style={styles.secondaryActionButtonText}>Pay subscription only</Text>
                 </Pressable>
               )}
               <Pressable
@@ -1748,6 +1794,12 @@ export default function App() {
                 <Text style={styles.secondaryActionButtonText}>
                   {isLoadingManagedBookings ? "Loading..." : "Manage bookings"}
                 </Text>
+              </Pressable>
+              <Pressable
+                onPress={() => setScreen("contribution")}
+                style={[styles.secondaryActionButton, styles.stackedActionButton]}
+              >
+                <Text style={styles.secondaryActionButtonText}>Donations & sponsorships</Text>
               </Pressable>
               <Pressable
                 disabled={isLoadingAdminSummary}
@@ -1851,7 +1903,7 @@ export default function App() {
             </Pressable>
           </View>
           <View style={styles.adminDashboardTabs}>
-            {([2, 3, 4, 5] as const).map((dashboardNumber) => {
+            {([2, 3, 4, 5, 6] as const).map((dashboardNumber) => {
               const selected = activeAdminDashboard === dashboardNumber;
               return (
                 <Pressable
@@ -1891,7 +1943,7 @@ export default function App() {
             <Text style={styles.introBody}>
               {activeAdminDashboard === 2
                 ? "Detailed coupon totals and day-wise meal breakdown."
-                : activeAdminDashboard === 3 ? "Total collection and booking records for an inclusive date range." : activeAdminDashboard === 4 ? "Look up total coupons and daily meals for an apartment." : "Paid and unpaid apartments by tower. An apartment is paid when any resident is marked Paid."}
+                : activeAdminDashboard === 3 ? "Total collection and booking records for an inclusive date range." : activeAdminDashboard === 4 ? "Look up total coupons and daily meals for an apartment." : activeAdminDashboard === 5 ? "Paid and unpaid apartments by tower. An apartment is paid when any resident is marked Paid." : "Event donations and sponsorships from apartments and corporates, separate from Pujo subscriptions."}
             </Text>
             {updatedAt && (activeAdminDashboard === 2 || activeAdminDashboard === 3) ? (
               <Text style={styles.adminTimestamp}>Updated {updatedAt}</Text>
@@ -1910,6 +1962,7 @@ export default function App() {
           ) : null}
           {activeAdminDashboard === 4 ? <ApartmentCoupons /> : null}
           {activeAdminDashboard === 5 ? <SubscriptionDashboard /> : null}
+          {activeAdminDashboard === 6 ? <ContributionDashboard /> : null}
           {adminSummary && activeAdminDashboard === 2 ? (
             <>
               <View style={styles.adminMetricGrid}>
@@ -2078,7 +2131,7 @@ export default function App() {
             </>
           ) : null}
         </ScrollView>
-        {activeAdminDashboard !== 5 && <View style={styles.summaryBar}>
+        {activeAdminDashboard !== 5 && activeAdminDashboard !== 6 && <View style={styles.summaryBar}>
           <View>
             <Text style={styles.summaryLabel}>
               {activeAdminDashboard === 2
@@ -2339,7 +2392,7 @@ export default function App() {
             <Text style={styles.headerKicker}>
               {paymentPurpose === "upgrade"
                 ? "TAKEAWAY UPGRADE"
-                : paymentPurpose === "donation" ? "PUJO DONATION" : "STEP 3 OF 3"}
+                : paymentPurpose === "donation" ? "PUJO SUBSCRIPTION" : "STEP 3 OF 3"}
             </Text>
             <Text style={styles.headerTitle}>Complete payment</Text>
           </View>
@@ -2357,7 +2410,7 @@ export default function App() {
           <Text style={styles.paymentLead}>
             {paymentPurpose === "upgrade"
               ? "Review the dine-in meals being switched to takeaway, then collect only the price difference."
-              : paymentPurpose === "donation" ? "Review your donation, enter the receipt number, and choose how to pay." : "Review your booking and choose how you would like to pay."}
+              : paymentPurpose === "donation" ? "Review your subscription, enter the receipt number, and choose how to pay." : "Review your booking and choose how you would like to pay."}
           </Text>
           {bookingSubmissionError ? (
             <Text style={styles.submissionError}>{bookingSubmissionError}</Text>
@@ -2366,7 +2419,7 @@ export default function App() {
             <Text style={styles.reviewEyebrow}>
               {paymentPurpose === "upgrade"
                 ? "TAKEAWAY UPGRADES"
-                : paymentPurpose === "donation" ? "YOUR DONATION" : "YOUR COUPONS"}
+                : paymentPurpose === "donation" ? "YOUR SUBSCRIPTION" : "YOUR COUPONS"}
             </Text>
             {paymentItems.map((item) => (
               <View key={item.id} style={[styles.reviewRow, item.id === "pujo-donation" && { flexWrap: "wrap", alignItems: "center" }]}>
@@ -2377,7 +2430,7 @@ export default function App() {
                   <View style={[styles.receiptField, isPhoneWidth && { width: "100%" }]}>
                     <Text style={styles.receiptLabel}>Receipt number</Text>
                     <TextInput
-                      accessibilityLabel="Pujo donation receipt number"
+                      accessibilityLabel="Pujo subscription receipt number"
                       placeholder="Enter receipt no."
                       keyboardType="number-pad"
                       maxLength={15}
@@ -2552,7 +2605,7 @@ export default function App() {
               {isSubmitting
                 ? paymentPurpose === "upgrade"
                   ? "Saving upgrade..."
-                  : paymentPurpose === "donation" ? "Saving donation..." : "Saving booking..."
+                  : paymentPurpose === "donation" ? "Saving subscription..." : "Saving booking..."
                 : "Confirm cash payment"}
             </Text>
             <Text style={styles.buttonArrow}>→</Text>
@@ -2609,7 +2662,7 @@ export default function App() {
               {isSubmitting
                 ? paymentPurpose === "upgrade"
                   ? "Saving upgrade..."
-                  : paymentPurpose === "donation" ? "Saving donation..." : "Saving booking..."
+                  : paymentPurpose === "donation" ? "Saving subscription..." : "Saving booking..."
                 : "Confirm cheque payment"}
             </Text>
             <Text style={styles.buttonArrow}>→</Text>
@@ -2695,7 +2748,7 @@ export default function App() {
                   {isSubmitting
                     ? paymentPurpose === "upgrade"
                       ? "Saving upgrade..."
-                      : paymentPurpose === "donation" ? "Saving donation..." : "Saving booking..."
+                      : paymentPurpose === "donation" ? "Saving subscription..." : "Saving booking..."
                     : "Confirm payment details"}
                 </Text>
                 <Text style={styles.buttonArrow}>→</Text>
@@ -2737,13 +2790,13 @@ export default function App() {
               <Text style={styles.successBody}>
                 {paymentPurpose === "upgrade"
                   ? "Your takeaway upgrade is confirmed."
-                  : paymentPurpose === "donation" ? "Your Pujo donation is confirmed." : "Your food coupon booking is confirmed."}
+                  : paymentPurpose === "donation" ? "Your Pujo subscription is confirmed." : "Your food coupon booking is confirmed."}
               </Text>
               <View style={styles.successReference}>
                 <Text style={styles.successReferenceLabel}>
                   {paymentPurpose === "upgrade"
                     ? "UPDATED BOOKING"
-                    : paymentPurpose === "donation" ? "DONATION RECEIPT" : "BOOKING REFERENCE"}
+                    : paymentPurpose === "donation" ? "SUBSCRIPTION RECEIPT" : "BOOKING REFERENCE"}
                 </Text>
                 <Text style={styles.successReferenceValue}>
                   {paymentPurpose === "upgrade"

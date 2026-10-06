@@ -129,7 +129,7 @@ export function ApartmentCoupons() {
           </View>
           <Text style={{ color: "#79584B" }}>
             Each included season-pass meal counts as one coupon per person.
-            Donations are excluded.
+            Subscriptions are excluded.
           </Text>
           {!report.meals.length && (
             <Text>No coupons booked for this apartment.</Text>

@@ -81,12 +81,15 @@ class ApiController {
     const action = p.action || "createBooking";
     const reads = [
       "getFoodMenu",
+      "getContributionApartments",
+      "getContributionReport",
       "checkDonation",
       "getBookingsForApartment",
       "getAdminSummary",
       "getCollectionReport",
       "getApartmentCoupons",
       "getSubscriptionSummary",
+      "getSubscriptionReceipts",
       "getUnpaidResidents",
       "getResidentContacts",
     ];
@@ -96,6 +99,13 @@ class ApiController {
     )
       throw new HttpException("Use POST for writes", 405);
     switch (action) {
+      case "getContributionReport":
+        this.auth.require(token);
+        return { ok: true, report: await this.bookings.contributionReport(p) };
+      case "getContributionApartments":
+        return { ok: true, apartments: await this.bookings.contributionApartments() };
+      case "createContribution":
+        return { ok: true, contribution: await this.bookings.createContribution(p) };
       case "getFoodMenu":
         return { ok: true, menu: await this.bookings.menu() };
       case "checkDonation":
@@ -105,6 +115,9 @@ class ApiController {
       case "getApartmentCoupons":
         this.auth.require(token);
         return { ok: true, report: await this.bookings.apartmentCoupons(p) };
+      case "getSubscriptionReceipts":
+        this.auth.require(token);
+        return { ok: true, report: await this.bookings.subscriptionReceipts(p) };
       case "getSubscriptionSummary":
         this.auth.require(token);
         return { ok: true, report: await this.bookings.subscriptionSummary() };

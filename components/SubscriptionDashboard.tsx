@@ -7,6 +7,7 @@ import {
   Text,
   View,
 } from "react-native";
+import { SubscriptionReceipts } from "./SubscriptionReceipts";
 import { ResidentContacts } from "./ResidentContacts";
 import { callBookingsApi } from "../src/api";
 
@@ -148,6 +149,7 @@ export function SubscriptionDashboard() {
           </Text>
         </>
       )}
+      <SubscriptionReceipts />
       <ResidentContacts refreshKey={revision} />
     </View>
   );

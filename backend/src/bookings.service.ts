@@ -84,6 +84,96 @@ export class BookingsService {
     @Inject(Database) private readonly db: Database,
     @Inject(SmsService) private readonly sms: SmsService,
   ) {}
+  async subscriptionReceipts(input: unknown) {
+    const receipt = z.string().trim().regex(/^[0-9]{1,15}$/, "Enter a receipt number containing up to 15 digits")
+      .refine(v => Number(v) > 0, "Receipt number must be greater than zero");
+    const p = parse(z.object({ fromReceipt: receipt, toReceipt: receipt }), input);
+    const from = Number(p.fromReceipt), to = Number(p.toReceipt);
+    if (from > to) fail("From receipt must be less than or equal to To receipt.");
+    const { rows } = await this.db.pool.query(
+      `SELECT "Recipt No."::text AS "receiptNumber", "TWR" AS tower, "Apt. No." AS apartment,
+       "NAME" AS name, "Amount" AS amount, "Transction ID" AS "paymentReference",
+       "Date"::text AS "paidDate", "Ph #" AS phone
+       FROM "Donations" WHERE "Recipt No." BETWEEN $1::bigint AND $2::bigint
+       ORDER BY "Recipt No.", "TWR", "Apt. No.", "NAME", "Date", "Transction ID", "Ph #", "Amount"`,
+      [String(from), String(to)],
+    );
+    return {
+      fromReceipt: String(from), toReceipt: String(to), generatedAt: new Date().toISOString(),
+      rows: rows.map(row => ({ ...row, amount: row.amount === null ? null : Number(row.amount) })),
+      count: rows.length,
+      totalAmount: rows.reduce((sum, row) => sum + cents(row.amount || 0), 0) / 100,
+    };
+  }
+  async contributionReport(input: unknown) {
+    const { contributorType } = parse(z.object({
+      contributorType: z.enum(["All", "Apartment", "Corporate"]).default("All"),
+    }), input);
+    const { rows } = await this.db.pool.query(
+      `SELECT id::text, contributor_type AS "contributorType", tower, apartment,
+       corporate_name AS "corporateName", contribution_type AS "contributionType",
+       amount, paid_date::text AS "paidDate", event_name AS "eventName"
+       FROM "Contributions" WHERE ($1 = 'All' OR contributor_type = $1)`,
+      [contributorType],
+    );
+    const compare = (a: string, b: string) => a.localeCompare(b, "en", { numeric: true, sensitivity: "base" });
+    rows.sort((a, b) => compare(a.contributorType, b.contributorType) ||
+      (a.contributorType === "Apartment"
+        ? compare(a.tower, b.tower) || compare(a.apartment, b.apartment)
+        : compare(a.corporateName, b.corporateName)) ||
+      b.paidDate.localeCompare(a.paidDate) || compare(b.id, a.id));
+    const donationCents = rows.filter(r => r.contributionType === "Donation").reduce((sum, r) => sum + cents(r.amount), 0);
+    const sponsorshipCents = rows.filter(r => r.contributionType === "Sponsorship").reduce((sum, r) => sum + cents(r.amount), 0);
+    return {
+      generatedAt: new Date().toISOString(), contributorType,
+      rows: rows.map(r => ({ ...r, amount: Number(r.amount) })),
+      totals: { entries: rows.length, donations: donationCents / 100, sponsorships: sponsorshipCents / 100, amount: (donationCents + sponsorshipCents) / 100 },
+    };
+  }
+  async contributionApartments() {
+    const { rows } = await this.db.pool.query(
+      `SELECT DISTINCT upper(btrim("Block")) AS tower, upper(btrim("Unit No")) AS apartment
+       FROM "Resident Master"
+       WHERE upper(btrim("Block")) IN ('1','2','3','4','5','6','7','8','9','TH')
+         AND btrim("Unit No") <> ''`,
+    );
+    return rows.sort((a, b) => a.tower.localeCompare(b.tower, undefined, { numeric: true }) ||
+      a.apartment.localeCompare(b.apartment, undefined, { numeric: true }));
+  }
+  async createContribution(input: unknown) {
+    const p = parse(z.object({
+      requestId: requestIdSchema,
+      contributorType: z.enum(["Apartment", "Corporate"]),
+      tower: z.string().trim().toUpperCase().max(20).default(""),
+      apartment: z.string().trim().toUpperCase().max(20).default(""),
+      corporateName: z.string().trim().max(200).default(""),
+      contributionType: z.enum(["Donation", "Sponsorship"]),
+      amount: z.number().finite().positive().max(10000000).multipleOf(0.01),
+      paidDate: dateSchema.refine(v => v <= today(), "Paid date cannot be in the future"),
+      eventName: z.string().trim().min(1).max(200),
+    }), input);
+    if (p.contributorType === "Apartment") {
+      if (!p.tower || !p.apartment || p.corporateName) fail("Select a tower and apartment.");
+    } else if (!p.corporateName || p.tower || p.apartment) fail("Enter a corporate name.");
+    const hash = fingerprint(p);
+    return this.db.transaction(async c => {
+      await c.query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))", ["contribution:" + p.requestId]);
+      const existing = (await c.query('SELECT id, request_hash FROM "Contributions" WHERE request_id=$1', [p.requestId])).rows[0];
+      if (existing) {
+        if (existing.request_hash !== hash) throw new ConflictException("This submission was already saved with different details.");
+        return { id: String(existing.id) };
+      }
+      if (p.contributorType === "Apartment") {
+        const found = await c.query(`SELECT 1 FROM "Resident Master" WHERE upper(btrim("Block"))=$1 AND upper(btrim("Unit No"))=$2 LIMIT 1`, [p.tower, p.apartment]);
+        if (!found.rowCount) fail("Choose an apartment from Resident Master.");
+      }
+      const row = (await c.query(
+        'INSERT INTO "Contributions" (request_id, request_hash, contributor_type, tower, apartment, corporate_name, contribution_type, amount, paid_date, event_name) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING id',
+        [p.requestId, hash, p.contributorType, p.tower || null, p.apartment || null, p.corporateName || null, p.contributionType, p.amount, p.paidDate, p.eventName],
+      )).rows[0];
+      return { id: String(row.id) };
+    });
+  }
   async menu() {
     return menuFromRows(
       (
@@ -109,8 +199,8 @@ export class BookingsService {
     const payment = parse(paymentSchema, input);
     const phone = parse(phoneSchema, input.phoneNumber);
     const donation = parse(donationSchema, input.donation);
-    if (cents(payment.payableAmount) !== 400000)
-      fail("Donation amount must be Rs. 4,000.");
+    if (cents(payment.payableAmount) !== cents(donation.amount))
+      fail("Payment total must match the subscription amount.");
     const paymentReference =
       payment.paymentMethod === "cash" ? "CASH" : payment.paymentReference;
     return this.db.transaction(async (c) => {
@@ -130,22 +220,23 @@ export class BookingsService {
           String(existing[0]["Recipt No."]) ===
             String(Number(donation.receiptNumber)) &&
           existing[0].NAME === donation.name &&
-          Number(existing[0].Amount) === 4000 &&
+          cents(existing[0].Amount) === cents(donation.amount) &&
           existing[0]["Transction ID"] === paymentReference &&
           existing[0]["Ph #"] === `+${phone}`;
         if (!same)
           throw new ConflictException(
-            "A donation already exists for this apartment.",
+            "A subscription already exists for this apartment.",
           );
         return { receiptNumber: String(existing[0]["Recipt No."]) };
       }
       await c.query(
-        'INSERT INTO "Donations" ("Recipt No.","TWR","Apt. No.","NAME","Amount","Transction ID","Date","Ph #") VALUES ($1,$2,$3,$4,4000,$5,$6,$7)',
+        'INSERT INTO "Donations" ("Recipt No.","TWR","Apt. No.","NAME","Amount","Transction ID","Date","Ph #") VALUES ($1,$2,$3,$4,$5,$6,$7,$8)',
         [
           donation.receiptNumber,
           p.towerNumber,
           p.apartmentNumber,
           donation.name,
+          donation.amount,
           paymentReference,
           today(),
           `+${phone}`,
@@ -199,7 +290,7 @@ export class BookingsService {
       validatePrices(items, menu);
       const total =
         items.reduce((n, i) => n + cents(i.lineTotal), 0) +
-        (donation ? 400000 : 0);
+        (donation ? cents(donation.amount) : 0);
       if (total !== cents(payment.payableAmount))
         fail("Booking total changed. Review your selection.");
       // Lock one apartment, preserving legacy duplicate records while preventing new duplicates.
@@ -214,10 +305,10 @@ export class BookingsService {
       ).rows[0];
       if (donation && donor)
         throw new ConflictException(
-          "A donation already exists for this apartment.",
+          "A subscription already exists for this apartment.",
         );
       if (!donation && !donor)
-        fail("A Pujo donation record is required before booking coupons.");
+        fail("A Pujo subscription record is required before booking coupons.");
       const serial = (
         await c.query(
           `SELECT nextval(pg_get_serial_sequence('"Bookings"','Sl No')) AS n`,
@@ -226,7 +317,7 @@ export class BookingsService {
       const reference = `UUC${today().slice(2, 4)}-${String(serial).padStart(6, "0")}`;
       const text = details(
         items,
-        donation ? "Pujo donation x 1 (Rs. 4,000)" : "",
+        donation ? `Pujo subscription x 1 (Rs. ${donation.amount.toLocaleString("en-IN")})` : "",
       );
       const state = {
         state: "pending",
@@ -256,11 +347,12 @@ export class BookingsService {
         await this.insertItem(c, reference, aptNo(p), row["Created At"], item);
       if (donation) {
         await c.query(
-          'INSERT INTO "Donations" ("TWR","Apt. No.","NAME","Amount","Transction ID","Date","Ph #","Recipt No.") VALUES ($1,$2,$3,4000,$4,$5,$6,$7)',
+          'INSERT INTO "Donations" ("TWR","Apt. No.","NAME","Amount","Transction ID","Date","Ph #","Recipt No.") VALUES ($1,$2,$3,$4,$5,$6,$7,$8)',
           [
             p.towerNumber,
             p.apartmentNumber,
             donation.name,
+            donation.amount,
             payment.paymentMethod === "cash"
               ? "CASH"
               : payment.paymentReference,
@@ -553,7 +645,7 @@ export class BookingsService {
           b["Booking Details"]
             .split(";")
             .map((s: string) => s.trim())
-            .find((s: string) => s.startsWith("Pujo donation")) || "";
+            .find((s: string) => s.startsWith("Pujo subscription")) || "";
         const state = {
           ...b["SMS Status"],
           upgrades: [

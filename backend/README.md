@@ -38,7 +38,7 @@ For backend development, `npm run dev --prefix backend` runs TypeScript directly
 
 Source: [UUC Pujo Coupon Bookings](https://docs.google.com/spreadsheets/d/1BOVNzrNe5qgWFLcG17W2rxw87rKQYjMHx7bA8pE6pKY/edit). The source workbook was read only and remains unchanged.
 
-There are exactly five application tables, with every named source column preserved except the requested Bookings messaging changes. SQL identifiers retain the sheet names and original spelling. Empty Subscription and formula dashboard tabs are excluded; Resident Master is preserved as data, without adding a new resident-management screen.
+The five original application tables retain their names; a separate Contributions table records event donations and sponsorships. Every named source column is preserved except the requested Bookings messaging changes. SQL identifiers retain the sheet names and original spelling. Empty Subscription and formula dashboard tabs are excluded; Resident Master is preserved as data, without adding a new resident-management screen.
 
 | Table | Columns | Imported rows |
 | --- | ---: | ---: |
@@ -155,3 +155,11 @@ apartment before joining, preventing duplicate contact rows. Missing receipts
 stay blank (displayed as an em dash). Unpaid does not display/export this column.
 Excel exports use the same status-dependent columns as the dashboard. No schema
 change is needed.
+
+## Subscriptions and event contributions
+
+The frontend calls the existing Pujo donation flow "subscription". The legacy Donations table and API action names are retained. Subscription payments default to Rs. 4,000 and can be larger.
+
+The landing page Donations & sponsorships form records payments already received, separately from subscriptions. It accepts a Resident Master apartment or corporate name, Donation/Sponsorship, positive amount, paid date (IST, not future), and event name. It does not collect payment or mark residents Paid. Multiple contributions per contributor are allowed; identical request IDs replay the existing record and changed requests conflict.
+
+Apply sql/002-contributions.sql to each hosted database before deploying the feature, or run the updated db:migrate command with that database configured. The local development table has been created. No existing subscription rows are migrated or renamed.

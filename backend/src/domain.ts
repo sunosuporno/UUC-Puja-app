@@ -77,7 +77,7 @@ export const donationSchema = z.object({
     .min(1)
     .max(80)
     .regex(/^\p{L}[\p{L}\p{M} .'’\-]*$/u),
-  amount: z.literal(4000),
+  amount: money.min(4000, "Subscription must be at least Rs. 4,000").multipleOf(0.01),
   receiptNumber: z
     .string()
     .trim()

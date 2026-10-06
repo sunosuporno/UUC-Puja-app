@@ -75,9 +75,12 @@ before(async () => {
     readFileSync(new URL("../sql/001-schema.sql", import.meta.url), "utf8"),
   );
 });
+before(async () => {
+  await db.pool.query(readFileSync(new URL("../sql/002-contributions.sql", import.meta.url), "utf8"));
+});
 beforeEach(async () => {
   await db.pool.query(
-    'TRUNCATE "Booking Items","Bookings","Donations","Food Menu","Resident Master" RESTART IDENTITY CASCADE',
+    'TRUNCATE "Contributions","Booking Items","Bookings","Donations","Food Menu","Resident Master" RESTART IDENTITY CASCADE',
   );
   await bookings.saveMenu({ row: menu });
   await db.pool.query(
@@ -90,7 +93,7 @@ beforeEach(async () => {
 after(async () => {
   await db.onModuleDestroy();
 });
-test("schema keeps five source tables with added resident and donation row IDs", async () => {
+test("schema preserves source tables and adds separate contributions", async () => {
   const rows = (
     await db.pool.query(
       "SELECT table_name,count(*)::int AS n FROM information_schema.columns WHERE table_schema='public' GROUP BY table_name ORDER BY table_name",
@@ -99,6 +102,7 @@ test("schema keeps five source tables with added resident and donation row IDs",
   assert.deepEqual(rows, [
     { table_name: "Booking Items", n: 12 },
     { table_name: "Bookings", n: 12 },
+    { table_name: "Contributions", n: 12 },
     { table_name: "Donations", n: 9 },
     { table_name: "Food Menu", n: 9 },
     { table_name: "Resident Master", n: 13 },
@@ -465,7 +469,7 @@ test("admin sessions reject missing, incorrect and tampered credentials", () => 
 
 test("server enforces donation eligibility even when the frontend is bypassed", async () => {
   await db.pool.query('DELETE FROM "Donations"');
-  await assert.rejects(bookings.create(order()), /donation record is required/);
+  await assert.rejects(bookings.create(order()), /subscription record is required/);
   assert.equal((await db.pool.query('SELECT * FROM "Bookings"')).rowCount, 0);
 });
 
@@ -831,7 +835,7 @@ test("donation-only validates payment and receipt, preserving cheque and UPI ref
   });
   await assert.rejects(
     bookings.donate({ ...request, payableAmount: 3999 }),
-    /4,000/,
+    /match the subscription amount/,
   );
   await assert.rejects(
     bookings.donate({
@@ -1147,4 +1151,127 @@ test("paid/all contacts join receipts by tower and unit without multiplying cont
   });
   assert.equal(unpaid.contacts.length, 1);
   assert.equal(unpaid.contacts[0].receiptNumbers, "");
+});
+
+test("higher donations persist exact amounts in donation-only and coupon flows", async () => {
+  await db.pool.query('DELETE FROM "Donations"');
+  for (const withCoupons of [false, true]) {
+    const request = order({
+      apartmentNumber: withCoupons ? "202" : "201",
+      payableAmount: 5500.50 + (withCoupons ? 500 : 0),
+      donation: { name: "Test Resident", amount: 5500.50, receiptNumber: withCoupons ? "981" : "980" },
+    });
+    const result = withCoupons ? await bookings.create(request) : await bookings.donate(request);
+    assert.deepEqual(withCoupons ? await bookings.create(request) : await bookings.donate(request), result);
+    const saved = await db.pool.query('SELECT "Amount" FROM "Donations" WHERE "Apt. No."=$1', [request.apartmentNumber]);
+    assert.equal(Number(saved.rows[0].Amount), 5500.50);
+    if (withCoupons) {
+      const booking = (await db.pool.query('SELECT * FROM "Bookings"')).rows[0];
+      assert.equal(Number(booking["Payable Amount"]), 6000.50);
+      assert.match(booking["Booking Details"], /5,500.5/);
+    } else {
+      await assert.rejects(bookings.donate({...request, payableAmount: 6000, donation: {...request.donation, amount: 6000}}), /already exists/);
+    }
+  }
+});
+
+test("both donation flows reject below-minimum, invalid precision, and mismatched totals", async () => {
+  await db.pool.query('DELETE FROM "Donations"');
+  for (const withCoupons of [false, true]) {
+    for (const amount of [3999, -1, 5000.001, 10000001]) {
+      const request = order({ payableAmount: amount + (withCoupons ? 500 : 0),
+        donation: { name: "Test Resident", amount, receiptNumber: "982" } });
+      await assert.rejects(withCoupons ? bookings.create(request) : bookings.donate(request));
+    }
+    const request = order({ payableAmount: 4000,
+      donation: { name: "Test Resident", amount: 6000, receiptNumber: "982" } });
+    await assert.rejects(withCoupons ? bookings.create(request) : bookings.donate(request));
+  }
+  assert.equal((await db.pool.query('SELECT count(*) FROM "Donations"')).rows[0].count, "0");
+});
+
+test("contributions support repeated apartment and corporate payments without changing subscriptions", async () => {
+  await db.pool.query(`INSERT INTO "Resident Master" ("Block","Unit No","Name","Paid") VALUES ('2','202','Test','Unpaid')`);
+  const request = { requestId: "contribution-test-1", contributorType: "Apartment", tower: "2", apartment: "202",
+    contributionType: "Donation", amount: 1500.25, paidDate: today(), eventName: "Cultural evening" };
+  const [first, replay] = await Promise.all([bookings.createContribution(request), bookings.createContribution(request)]);
+  assert.deepEqual(first, replay);
+  await assert.rejects(bookings.createContribution({...request, amount: 1600}), /different details/);
+  await bookings.createContribution({...request, requestId: "contribution-test-2"});
+  await bookings.createContribution({...request, requestId: "contribution-test-3", contributorType: "Corporate",
+    tower: "", apartment: "", corporateName: "Example Company", contributionType: "Sponsorship"});
+  const rows = (await db.pool.query('SELECT * FROM "Contributions" ORDER BY id')).rows;
+  assert.equal(rows.length, 3);
+  assert.equal(Number(rows[0].amount), 1500.25);
+  assert.equal(rows[2].corporate_name, "Example Company");
+  assert.equal(rows[2].tower, null);
+  assert.equal((await db.pool.query('SELECT "Paid" FROM "Resident Master"')).rows[0].Paid, "Unpaid");
+  assert.equal((await db.pool.query('SELECT count(*) FROM "Donations"')).rows[0].count, "1");
+  assert.deepEqual(await bookings.contributionApartments(), [{tower: "2", apartment: "202"}]);
+});
+
+test("contributions reject invalid contributor, date and amount", async () => {
+  const request = { requestId: "contribution-invalid", contributorType: "Corporate", corporateName: "Example",
+    contributionType: "Sponsorship", amount: 100, paidDate: today(), eventName: "Event" };
+  for (const change of [{amount: 0}, {amount: -1}, {amount: 1.001}, {corporateName: ""},
+    {eventName: ""}, {paidDate: "2026-02-30"}, {paidDate: "2099-01-01"},
+    {contributorType: "Apartment", corporateName: "", tower: "1", apartment: "999"},
+    {tower: "1", apartment: "101"}]) {
+    await assert.rejects(bookings.createContribution({...request, ...change}));
+  }
+  assert.equal((await db.pool.query('SELECT count(*) FROM "Contributions"')).rows[0].count, "0");
+});
+
+test("contribution report sorts apartments naturally then corporates and filters totals", async () => {
+  for (const [i, row] of [
+    ["Corporate", null, null, "zeta", "Donation", 10.25, "2026-10-02"],
+    ["Apartment", "2", "10", null, "Sponsorship", 20, "2026-10-02"],
+    ["Apartment", "2", "2", null, "Donation", 30, "2026-10-02"],
+    ["Apartment", "1", "101", null, "Donation", 40, "2026-10-02"],
+    ["Corporate", null, null, "Alpha", "Sponsorship", 50, "2026-10-02"],
+    ["Apartment", "2", "2", null, "Donation", 60.50, "2026-10-03"],
+    ["Apartment", "TH", "1", null, "Donation", 70, "2026-10-02"],
+  ].entries()) {
+    await db.pool.query('INSERT INTO "Contributions" (request_id,request_hash,contributor_type,tower,apartment,corporate_name,contribution_type,amount,paid_date,event_name) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)',
+      ["report-" + i, "test", ...row, "Test event"]);
+  }
+  const all = await bookings.contributionReport({});
+  assert.deepEqual(all.rows.map(r => r.corporateName || r.tower + "/" + r.apartment),
+    ["1/101", "2/2", "2/2", "2/10", "TH/1", "Alpha", "zeta"]);
+  assert.equal(all.rows[1].paidDate, "2026-10-03");
+  assert.deepEqual(all.totals, {entries: 7, donations: 210.75, sponsorships: 70, amount: 280.75});
+  const corporate = await bookings.contributionReport({contributorType: "Corporate"});
+  assert.deepEqual(corporate.rows.map(r => r.corporateName), ["Alpha", "zeta"]);
+  assert.equal(corporate.totals.amount, 60.25);
+  const apartments = await bookings.contributionReport({contributorType: "Apartment"});
+  assert.equal(apartments.rows.length, 5);
+  assert.equal(apartments.totals.amount, 220.50);
+  await assert.rejects(bookings.contributionReport({contributorType: "Other"}));
+  await db.pool.query('DELETE FROM "Contributions"');
+  assert.deepEqual((await bookings.contributionReport({})).totals, {entries: 0, donations: 0, sponsorships: 0, amount: 0});
+});
+
+test("subscription receipt ranges include boundaries and duplicate receipts without grouping", async () => {
+  await db.pool.query('DELETE FROM "Donations"');
+  await db.pool.query(`INSERT INTO "Donations" ("Recipt No.","TWR","Apt. No.","NAME","Amount","Transction ID","Date","Ph #")
+    VALUES (99,'1','101','Outside',4000,'CASH','2026-10-01','+919999999999'),
+    (100,'1','102','Boundary',4500,'CASH','2026-10-01','+919999999999'),
+    (150,'2','201','Middle',5000,'REF150','2026-10-02','+919999999998'),
+    (150,'3','301','Duplicate',null,'',null,''),
+    (200,'4','401','End',6000,'REF200','2026-10-03','+919999999997'),
+    (201,'5','501','Outside',4000,'CASH','2026-10-03','+919999999996')`);
+  const result = await bookings.subscriptionReceipts({fromReceipt: "100", toReceipt: "200"});
+  assert.deepEqual(result.rows.map(r => r.receiptNumber), ["100","150","150","200"]);
+  assert.equal(result.count, 4);
+  assert.equal(result.totalAmount, 15500);
+  assert.equal(result.rows[1].paymentReference, "REF150");
+  assert.equal(result.rows[1].phone, "+919999999998");
+  assert.equal(result.rows[2].amount, null);
+  assert.equal((await bookings.subscriptionReceipts({fromReceipt: "0150", toReceipt: "150"})).count, 2);
+  const empty = await bookings.subscriptionReceipts({fromReceipt: "300", toReceipt: "400"});
+  assert.equal(empty.count, 0);
+  assert.equal(empty.totalAmount, 0);
+  for (const [fromReceipt, toReceipt] of [["200","100"], ["0","200"], ["1.5","200"], ["abc","200"], ["1","1000000000000000"]]) {
+    await assert.rejects(bookings.subscriptionReceipts({fromReceipt, toReceipt}));
+  }
 });
