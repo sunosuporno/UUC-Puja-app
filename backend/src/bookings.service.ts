@@ -95,6 +95,12 @@ export class BookingsService {
        "NAME" AS name, "Amount" AS amount, "Transction ID" AS "paymentReference",
        "Date"::text AS "paidDate", "Ph #" AS phone
        FROM "Donations" WHERE "Recipt No." BETWEEN $1::bigint AND $2::bigint
+       AND (
+         nullif(btrim("TWR"), '') IS NOT NULL OR nullif(btrim("Apt. No."), '') IS NOT NULL
+         OR nullif(btrim("NAME"), '') IS NOT NULL OR "Amount" IS NOT NULL
+         OR nullif(btrim("Transction ID"), '') IS NOT NULL OR "Date" IS NOT NULL
+         OR nullif(btrim("Ph #"), '') IS NOT NULL
+       )
        ORDER BY "Recipt No.", "TWR", "Apt. No.", "NAME", "Date", "Transction ID", "Ph #", "Amount"`,
       [String(from), String(to)],
     );

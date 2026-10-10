@@ -1275,3 +1275,22 @@ test("subscription receipt ranges include boundaries and duplicate receipts with
     await assert.rejects(bookings.subscriptionReceipts({fromReceipt, toReceipt}));
   }
 });
+
+test("receipt lookup skips only empty numbered placeholders and retains partial records", async () => {
+  await db.pool.query('DELETE FROM "Donations"');
+  await db.pool.query(`INSERT INTO "Donations" ("Recipt No.","TWR","Apt. No.","NAME","Amount","Transction ID","Date","Ph #")
+    VALUES (100,'','','',null,'',null,''),
+    (101,' ','  ',' ',null,' ',null,' '),
+    (102,'','','',0,'',null,''),
+    (103,'','','Name only',null,'',null,''),
+    (104,'','','',null,'',null,'+919999999999'),
+    (105,'','','',null,'','2026-10-01',''),
+    (106,'','','',null,'REF',null,''),
+    (107,'1','','',null,'',null,''),
+    (108,'','101','',null,'',null,'')`);
+  const report = await bookings.subscriptionReceipts({fromReceipt: "100", toReceipt: "108"});
+  assert.deepEqual(report.rows.map(r => r.receiptNumber), ["102","103","104","105","106","107","108"]);
+  assert.equal(report.count, 7);
+  assert.equal(report.totalAmount, 0);
+  assert.equal((await db.pool.query('SELECT count(*) FROM "Donations"')).rows[0].count, "9");
+});
