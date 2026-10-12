@@ -948,58 +948,35 @@ test("apartment report totals include split season passes and upgrades without o
   );
 });
 
-test("subscriptions count unique apartments, any paid resident wins, and blanks are excluded", async () => {
-  await db.pool
-    .query(`INSERT INTO "Resident Master" ("Block", "Unit No", "Paid") VALUES
-    ('1', '101', 'Unpaid'), ('1', '101', 'Paid'), (' 1 ', ' 101 ', NULL),
-    ('1', '102', 'Unpaid'), ('1', '102', NULL),
-    ('2', '101', ' paid '), ('2', '102', ''),
-    (' th ', 'a', 'Unpaid'), ('TH', 'A', 'PAID'),
-    ('TH', 'B', NULL), ('TH', 'C', 'Pending'),
-    ('', '103', 'Paid'), (NULL, '104', 'Paid'), ('1', ' ', 'Paid'), ('1', NULL, 'Paid')`);
-  const report = await bookings.subscriptionSummary();
-  assert.deepEqual(report.totals, { paid: 3, unpaid: 4, total: 7 });
-  assert.equal(report.towers.length, 10);
-  assert.deepEqual(report.towers[0], {
-    tower: "1",
-    paid: 1,
-    unpaid: 1,
-    total: 2,
+test("subscription summary uses database matrix counts and sums each status independently", async () => {
+  const names = ["1","2","3","4","5","6","7","8","9","TH"];
+  const matrixRow = (status: string, counts: number[]) => ({
+    "Status / Tower": status, ...Object.fromEntries(names.map((name, i) => [name, String(counts[i])])),
   });
-  assert.deepEqual(report.towers[1], {
-    tower: "2",
-    paid: 1,
-    unpaid: 1,
-    total: 2,
-  });
-  assert.deepEqual(report.towers[2], {
-    tower: "3",
-    paid: 0,
-    unpaid: 0,
-    total: 0,
-  });
-  assert.deepEqual(report.towers[9], {
-    tower: "TH",
-    paid: 1,
-    unpaid: 2,
-    total: 3,
-  });
-  // A later payment must be reflected without rebuilding cached totals.
-  await db.pool.query(
-    `UPDATE "Resident Master" SET "Paid"='Paid' WHERE "Block"='1' AND "Unit No"='102'`,
-  );
-  assert.deepEqual((await bookings.subscriptionSummary()).totals, {
-    paid: 4,
-    unpaid: 3,
-    total: 7,
-  });
+  let rows = [
+    matrixRow("Total apartments", [83,85,84,84,87,89,87,83,27,12]),
+    matrixRow("Paid", [58,54,49,63,48,51,53,49,11,7]),
+    matrixRow("Not Paid", [25,31,35,21,39,38,34,34,16,5]),
+  ];
+  const source = { pool: { query: async (sql: string) => {
+    assert.equal(sql, "SELECT * FROM public.get_donation_matrix()");
+    return { rows };
+  } } } as unknown as Database;
+  const service = new BookingsService(source, sms);
+  const report = await service.subscriptionSummary();
+  assert.deepEqual(report.totals, {paid:443, unpaid:278, total:721});
+  assert.deepEqual(report.towers[1], {tower:"2",paid:54,unpaid:31,total:85});
+  assert.deepEqual(report.towers[9], {tower:"TH",paid:7,unpaid:5,total:12});
+  // Refresh reads new function output, including a valid all-zero matrix.
+  rows = ["Paid","Not Paid","Total apartments"].map(status => matrixRow(status, names.map(() => 0)));
+  assert.deepEqual((await service.subscriptionSummary()).totals, {paid:0,unpaid:0,total:0});
+  rows = [matrixRow("Paid", names.map(() => 0))];
+  await assert.rejects(service.subscriptionSummary(), /invalid count/);
 });
 
-test("subscriptions return zero totals for an empty resident master", async () => {
-  const report = await bookings.subscriptionSummary();
-  assert.deepEqual(report.totals, { paid: 0, unpaid: 0, total: 0 });
-  assert.equal(report.towers.length, 10);
-  assert.ok(report.towers.every((row) => row.total === 0));
+test("subscription summary reports a missing function without reverting to old calculations", async () => {
+  const source = { pool: { query: async () => { throw Object.assign(new Error("missing"), {code:"42883"}); } } } as unknown as Database;
+  await assert.rejects(new BookingsService(source, sms).subscriptionSummary(), /not installed/);
 });
 
 test("unpaid contacts prefer tenants, fall back to primary owners, and exclude any paid apartment", async () => {

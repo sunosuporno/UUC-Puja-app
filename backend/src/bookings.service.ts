@@ -3,6 +3,7 @@ import {
   Injectable,
   ConflictException,
   NotFoundException,
+  ServiceUnavailableException,
 } from "@nestjs/common";
 import { PoolClient } from "pg";
 import { z } from "zod";
@@ -701,48 +702,37 @@ export class BookingsService {
     return { apartment, ...result };
   }
   async subscriptionSummary() {
-    // Aggregate residents into apartments before counting; any paid member wins.
-    // A full summary needs every resident, so a single scan/hash aggregate is
-    // preferable to separate queries per tower or a new maintained totals table.
-    const rows = (
-      await this.db.pool.query<{
-        tower: string;
-        paid: number;
-        unpaid: number;
-        total: number;
-      }>(`
-        WITH apartments AS (
-          SELECT upper(btrim("Block")) AS tower, upper(btrim("Unit No")) AS unit,
-            bool_or(lower(btrim(coalesce("Paid", ''))) = 'paid') AS paid
-          FROM "Resident Master"
-          WHERE nullif(btrim("Block"), '') IS NOT NULL
-            AND nullif(btrim("Unit No"), '') IS NOT NULL
-          GROUP BY 1, 2
-        )
-        SELECT tower, count(*) FILTER (WHERE paid)::int AS paid,
-          count(*) FILTER (WHERE NOT paid)::int AS unpaid, count(*)::int AS total
-        FROM apartments GROUP BY tower
-      `)
-    ).rows;
-    const byTower = new Map(rows.map((row) => [row.tower, row]));
-    const towerNames = [
-      ...new Set([
-        "1",
-        "2",
-        "3",
-        "4",
-        "5",
-        "6",
-        "7",
-        "8",
-        "9",
-        "TH",
-        ...rows.map((row) => row.tower),
-      ]),
-    ].sort((a, b) => a.localeCompare(b, "en", { numeric: true }));
-    const towers = towerNames.map(
-      (tower) => byTower.get(tower) || { tower, paid: 0, unpaid: 0, total: 0 },
-    );
+    let rows: Record<string, unknown>[];
+    try {
+      rows = (await this.db.pool.query("SELECT * FROM public.get_donation_matrix()")).rows;
+    } catch (error: any) {
+      if (error?.code === "42883") {
+        throw new ServiceUnavailableException("Subscription summary function is not installed in this database.");
+      }
+      throw error;
+    }
+    // Use the function's counts directly; contacts and receipt lookups retain their own queries.
+    const statuses = new Map<string, Record<string, unknown>>();
+    for (const row of rows) {
+      const status = String(row["Status / Tower"] ?? "").trim().replace(/\s+/g, " ").toLowerCase();
+      if (statuses.has(status)) throw new ServiceUnavailableException("Subscription summary returned duplicate status rows.");
+      statuses.set(status, row);
+    }
+    const count = (status: string, tower: string) => {
+      const value = statuses.get(status)?.[tower];
+      if (!((typeof value === "number") || (typeof value === "string" && /^\d+$/.test(value.trim())))) {
+        throw new ServiceUnavailableException("Subscription summary returned an invalid count.");
+      }
+      const number = Number(value);
+      if (!Number.isSafeInteger(number) || number < 0) throw new ServiceUnavailableException("Subscription summary returned an invalid count.");
+      return number;
+    };
+    const towers = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "TH"].map(tower => ({
+      tower,
+      paid: count("paid", tower),
+      unpaid: count("not paid", tower),
+      total: count("total apartments", tower),
+    }));
     const totals = towers.reduce(
       (sum, row) => ({
         paid: sum.paid + row.paid,

@@ -139,13 +139,12 @@ export function SubscriptionDashboard() {
           </ScrollView>
           {!report.totals.total && (
             <Text style={styles.note}>
-              No apartments with both a block and unit number were found.
+              No apartments were returned by the subscription summary.
             </Text>
           )}
           <Text style={styles.note}>
-            Each block and unit number is counted once. Apartments with no
-            resident marked Paid are Not Paid. Rows missing a block or unit
-            number are excluded.
+            Counts reflect the current subscription summary. Overall totals
+            are the sum of towers 1–9 and TH.
           </Text>
         </>
       )}
