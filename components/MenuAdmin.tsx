@@ -5,6 +5,7 @@ import {
   TextInput,
   Pressable,
   ScrollView,
+  Switch,
   Platform,
 } from "react-native";
 import { apiRequest } from "../src/api";
@@ -306,68 +307,55 @@ export function MenuAdmin({
             original?.Day === r.Day &&
             original?.["Meal Time"] === r["Meal Time"];
           return (
-            <View key={JSON.stringify([r.Day, r["Meal Time"]])}>
-              <Pressable
-                accessibilityRole="button"
-                accessibilityState={{
-                  selected,
-                  expanded: selected,
-                  disabled: busy,
-                }}
-                disabled={busy}
-                onPress={() => {
-                  setRow({ ...r });
-                  setOriginal({ Day: r.Day, "Meal Time": r["Meal Time"] });
-                  setEditorOpen(true);
-                  setEditorAtTop(false);
-                  setConfirmDelete(false);
-                  setError("");
-                  setNotice("");
-                }}
-                style={{
-                  borderBottomWidth: 1,
-                  borderBottomColor: selected ? "#7D211B" : "#EBDDC9",
-                  borderLeftWidth: 4,
-                  borderLeftColor: selected ? "#7D211B" : "transparent",
-                  backgroundColor: selected ? "#F8E8DB" : "transparent",
-                  paddingVertical: 14,
-                  paddingHorizontal: 12,
-                  borderRadius: 8,
-                }}
-              >
-                <View
-                  style={{
-                    flexDirection: "row",
-                    justifyContent: "space-between",
-                    gap: 12,
-                  }}
-                >
-                  <Text
-                    style={{
-                      fontWeight: "600",
-                      color: selected ? "#7D211B" : "#241A17",
-                      flex: 1,
-                    }}
-                  >
-                    {r.Day} · {r["Meal Time"]}
+            <View key={JSON.stringify([r.Day, r["Meal Time"]])}
+              style={{ borderWidth: 1, borderColor: selected ? "#7D211B" : "#E7D2B7", borderRadius: 12,
+                backgroundColor: r["Booking Paused"] ? "#FFF8EE" : "#FFFFFF", padding: 18, marginBottom: 12, gap: 16 }}>
+              <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", gap: 16 }}>
+                <View style={{ flexGrow: 1, flexBasis: 220, gap: 6 }}>
+                  <Text style={{ fontSize: 19, fontWeight: "700", color: "#632719" }}>{r.Day} · {r["Meal Time"]}</Text>
+                  <Text style={{ color: "#795E50", fontSize: 15 }}>
+                    {r.Date ? new Date(r.Date + "T00:00:00+05:30").toLocaleDateString("en-IN", { dateStyle: "medium", timeZone: "Asia/Kolkata" }) : "Season pass configuration"}
                   </Text>
-                  {selected && (
-                    <Text style={{ color: "#7D211B", fontWeight: "600" }}>
-                      Editing
-                    </Text>
-                  )}
                 </View>
-                <Text>{r.Date || "Season pass configuration"}</Text>
-              </Pressable>
-              <View style={{ paddingHorizontal: 12, paddingVertical: 10, flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: 14 }}>
-                <Text style={{ color: "#7D211B", fontWeight: "600" }}>{r["Booking Paused"] ? "Booking paused" : "Booking enabled"}</Text>
-                <Pressable accessibilityRole="button"
-                  accessibilityLabel={`${r["Booking Paused"] ? "Resume" : "Pause"} booking for ${r.Day} ${r["Meal Time"]}`}
-                  disabled={busy} onPress={() => void togglePause(r)}
-                  style={[s.button, busy && { opacity: 0.5 }]}>
-                  <Text style={s.buttonText}>{r["Booking Paused"] ? "Resume booking" : "Pause booking"}</Text>
-                </Pressable>
+                <View style={{ flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: 20 }}>
+                  <View style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>
+                    <View style={{ gap: 3 }}>
+                      <Text style={{ color: "#632719", fontSize: 14, fontWeight: "600" }}>Accept bookings</Text>
+                      <Text style={{ color: r["Booking Paused"] ? "#996012" : "#327143", fontWeight: "700" }}>
+                        {r["Booking Paused"] ? "Paused" : "On"}
+                      </Text>
+                    </View>
+                    <Switch
+                      accessibilityLabel={`Accept bookings for ${r.Day} ${r["Meal Time"]}`}
+                      value={!r["Booking Paused"]}
+                      disabled={busy}
+                      onValueChange={() => void togglePause(r)}
+                      trackColor={{ false: "#C8B9A7", true: "#327143" }}
+                      thumbColor="#FFFFFF"
+                    />
+                  </View>
+                  <Pressable accessibilityRole="button"
+                    accessibilityLabel={`Edit menu for ${r.Day} ${r["Meal Time"]}`}
+                    accessibilityState={{ expanded: selected, disabled: busy }}
+                    disabled={busy}
+                    onPress={() => {
+                      if (selected) { setEditorOpen(false); return; }
+                      setRow({ ...r });
+                      setOriginal({ Day: r.Day, "Meal Time": r["Meal Time"] });
+                      setEditorOpen(true);
+                      setEditorAtTop(false);
+                      setConfirmDelete(false);
+                      setError("");
+                      setNotice("");
+                    }}
+                    style={{ borderWidth: 1, borderColor: "#C9AA90", borderRadius: 8, paddingHorizontal: 16, paddingVertical: 12, opacity: busy ? 0.5 : 1 }}>
+                    <Text style={{ color: "#7D211B", fontWeight: "700" }}>{selected ? "Close editor" : "Edit menu"}</Text>
+                  </Pressable>
+                </View>
               </View>
+              {r["Booking Paused"] && <Text style={{ color: "#996012", fontSize: 14 }}>
+                Hidden from new bookings. Existing bookings are unchanged.
+              </Text>}
               {selected && editor}
             </View>
           );
