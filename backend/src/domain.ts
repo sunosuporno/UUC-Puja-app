@@ -97,7 +97,7 @@ export const aptNo = (p: { towerNumber: string; apartmentNumber: string }) =>
 export function menuFromRows(rows: MenuRow[], activeOnly = true) {
   const days: any[] = [];
   for (const row of rows) {
-    if (row.Day === "Season Pass" || (activeOnly && row.Date < today()))
+    if (row.Day === "Season Pass" || (activeOnly && (row.Date < today() || row["Booking Paused"])))
       continue;
     let day = days.find((d) => d.date === row.Date && d.name === row.Day);
     if (!day) {
@@ -124,7 +124,7 @@ export function menuFromRows(rows: MenuRow[], activeOnly = true) {
   }
   const pass = rows.find((r) => r.Day === "Season Pass");
   let seasonPass: any = null;
-  if (pass) {
+  if (pass && (!activeOnly || !pass["Booking Paused"])) {
     const includedDays = String(pass["Menu Veg"] || DEFAULT_DAYS.join(","))
       .split(",")
       .map((s) => s.trim())
@@ -143,7 +143,9 @@ export function menuFromRows(rows: MenuRow[], activeOnly = true) {
     );
     if (
       includedDates.every(Boolean) &&
-      (!activeOnly || includedDates.every((d) => d >= today()))
+      (!activeOnly || (includedDates.every((d) => d >= today()) &&
+        !rows.some(r => r["Booking Paused"] && includedDays.some(n => slug(n) === slug(r.Day)) &&
+          r["Meal Time"] === (pass["Meal Time"] || "Lunch"))))
     )
       seasonPass = {
         price,

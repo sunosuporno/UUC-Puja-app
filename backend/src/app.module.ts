@@ -48,6 +48,13 @@ class ApiController {
     this.auth.require(token);
     return { ok: true, ...(await this.bookings.saveMenu(body)) };
   }
+  @Post("admin/menu/pause") async pauseMeal(
+    @Headers("authorization") token: string,
+    @Body() body: unknown,
+  ) {
+    this.auth.require(token);
+    return { ok: true, ...(await this.bookings.setMealPaused(body)) };
+  }
   @Post("admin/menu/delete") async remove(
     @Headers("authorization") token: string,
     @Body() body: any,

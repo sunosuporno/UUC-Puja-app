@@ -6,7 +6,7 @@ import { Database } from "../src/database";
 import { BookingsService } from "../src/bookings.service";
 import { SmsService } from "../src/sms.service";
 import { Auth } from "../src/auth";
-import { today } from "../src/domain";
+import { today, menuFromRows } from "../src/domain";
 
 const url = process.env.TEST_DATABASE_URL;
 if (!url || !new URL(url).pathname.endsWith("_test"))
@@ -77,6 +77,7 @@ before(async () => {
 });
 before(async () => {
   await db.pool.query(readFileSync(new URL("../sql/002-contributions.sql", import.meta.url), "utf8"));
+  await db.pool.query(readFileSync(new URL("../sql/003-menu-paused.sql", import.meta.url), "utf8"));
 });
 beforeEach(async () => {
   await db.pool.query(
@@ -104,7 +105,7 @@ test("schema preserves source tables and adds separate contributions", async () 
     { table_name: "Bookings", n: 12 },
     { table_name: "Contributions", n: 12 },
     { table_name: "Donations", n: 9 },
-    { table_name: "Food Menu", n: 9 },
+    { table_name: "Food Menu", n: 10 },
     { table_name: "Resident Master", n: 13 },
   ]);
 });
@@ -1270,4 +1271,35 @@ test("receipt lookup skips only empty numbered placeholders and retains partial 
   assert.equal(report.count, 7);
   assert.equal(report.totalAmount, 0);
   assert.equal((await db.pool.query('SELECT count(*) FROM "Donations"')).rows[0].count, "9");
+});
+
+
+test("pausing one event meal hides every option, rejects stale orders, and survives edits", async () => {
+  await bookings.saveMenu({row: {...menu, "Meal Time": "Dinner"}});
+  await bookings.setMealPaused({Day: menu.Day, "Meal Time": "Lunch", paused: true});
+  const publicMenu = await bookings.menu();
+  assert.ok(publicMenu.days[0].meals.every((m: any) => m.mealTime === "Dinner"));
+  await assert.rejects(bookings.create(order()), /unavailable/);
+  assert.equal((await db.pool.query('SELECT count(*) FROM "Bookings"')).rows[0].count, "0");
+  await bookings.saveMenu({row: {...menu, "Menu Veg": "Updated"}, original: {Day: menu.Day, "Meal Time": "Lunch"}});
+  assert.equal((await bookings.adminMenu()).find(r => r["Meal Time"] === "Lunch")!["Booking Paused"], true);
+  await bookings.setMealPaused({Day: menu.Day, "Meal Time": "Lunch", paused: false});
+  assert.ok((await bookings.menu()).days[0].meals.some((m: any) => m.mealTime === "Lunch"));
+  const saved = await bookings.create(order());
+  await bookings.setMealPaused({Day: menu.Day, "Meal Time": "Lunch", paused: true});
+  assert.equal((await bookings.bookings(loc)).length, 1);
+  assert.deepEqual(await bookings.create(order()), saved);
+});
+
+test("paused included meals disable new season passes but preserve existing booking menu", () => {
+  const rows = [
+    {...menu, Day: "Saptami 1"},
+    {...menu, Day: "Saptami 2"},
+    {...menu, Day: "Nabami", "Booking Paused": true},
+    {...menu, Day: "Season Pass", "Menu Veg": "Saptami 1,Saptami 2,Nabami"},
+  ];
+  assert.equal(menuFromRows(rows).seasonPass, null);
+  assert.ok(menuFromRows(rows, false).seasonPass);
+  rows[2]["Booking Paused"] = false;
+  assert.ok(menuFromRows(rows).seasonPass);
 });

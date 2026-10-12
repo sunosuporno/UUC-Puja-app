@@ -911,6 +911,19 @@ export class BookingsService {
       day.meals.sort((a: any, b: any) => rank(a.mealType) - rank(b.mealType));
     return { generatedAt: new Date().toISOString(), totals, days };
   }
+  async setMealPaused(input: unknown) {
+    const p = parse(z.object({
+      Day: z.string().trim().min(1).max(100),
+      "Meal Time": z.string().trim().min(1).max(100),
+      paused: z.boolean(),
+    }), input);
+    const result = await this.db.pool.query(
+      'UPDATE "Food Menu" SET "Booking Paused"=$3 WHERE "Day"=$1 AND "Meal Time"=$2 RETURNING "Day"',
+      [p.Day, p["Meal Time"], p.paused],
+    );
+    if (!result.rowCount) throw new NotFoundException("Menu row no longer exists.");
+    return { paused: p.paused };
+  }
   async adminMenu() {
     return (
       await this.db.pool.query(
@@ -1018,6 +1031,10 @@ export class BookingsService {
         `INSERT INTO "Food Menu" (${MENU_COLUMNS.map((k) => `"${k}"`).join(",")}) VALUES (${MENU_COLUMNS.map((_, i) => "$" + (i + 1)).join(",")})`,
         MENU_COLUMNS.map((k) => (row as any)[k]),
       );
+      // Menu edits must not silently resume a paused meal.
+      if (existing?.["Booking Paused"]) {
+        await c.query('UPDATE "Food Menu" SET "Booking Paused"=true WHERE "Day"=$1 AND "Meal Time"=$2', [row.Day, row["Meal Time"]]);
+      }
       const all = (await c.query('SELECT * FROM "Food Menu"')).rows;
       if (
         all.some((r) => r.Day === "Season Pass") &&

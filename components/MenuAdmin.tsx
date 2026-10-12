@@ -10,6 +10,7 @@ import {
 import { apiRequest } from "../src/api";
 import { s } from "./AdminAccess";
 type Row = {
+  "Booking Paused"?: boolean;
   Day: string;
   "Meal Time": string;
   "Menu Veg": string;
@@ -76,13 +77,25 @@ export function MenuAdmin({
       await apiRequest("/admin/menu", { row, original });
       await load();
       setOriginal({ Day: row.Day, "Meal Time": row["Meal Time"] });
-      setNotice("Saved. The menu is available to residents.");
+      setNotice("Saved. Any existing booking pause is preserved.");
       onChanged();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Unable to save");
     } finally {
       setBusy(false);
     }
+  }
+  async function togglePause(meal: Row) {
+    if (busy) return;
+    setBusy(true); setError(""); setNotice("");
+    try {
+      await apiRequest("/admin/menu/pause", { Day: meal.Day, "Meal Time": meal["Meal Time"], paused: !meal["Booking Paused"] });
+      await load();
+      setNotice(meal["Booking Paused"] ? "Booking resumed for this meal." : "Booking paused for this meal and all its food and service options.");
+      onChanged();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Unable to change booking availability.");
+    } finally { setBusy(false); }
   }
   async function remove() {
     if (!original || busy) return;
@@ -231,7 +244,7 @@ export function MenuAdmin({
         </Pressable>
         <Text style={s.title}>Events & menus</Text>
         <Text>
-          Each row is one event meal. Saving makes it available immediately.
+          Each row is one event meal. Pause covers all food and service options. Season passes containing a paused meal are also unavailable for new bookings.
           Past events automatically disappear from the booking menu.
         </Text>
         <View style={s.row}>
@@ -346,6 +359,15 @@ export function MenuAdmin({
                 </View>
                 <Text>{r.Date || "Season pass configuration"}</Text>
               </Pressable>
+              <View style={{ paddingHorizontal: 12, paddingVertical: 10, flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: 14 }}>
+                <Text style={{ color: "#7D211B", fontWeight: "600" }}>{r["Booking Paused"] ? "Booking paused" : "Booking enabled"}</Text>
+                <Pressable accessibilityRole="button"
+                  accessibilityLabel={`${r["Booking Paused"] ? "Resume" : "Pause"} booking for ${r.Day} ${r["Meal Time"]}`}
+                  disabled={busy} onPress={() => void togglePause(r)}
+                  style={[s.button, busy && { opacity: 0.5 }]}>
+                  <Text style={s.buttonText}>{r["Booking Paused"] ? "Resume booking" : "Pause booking"}</Text>
+                </Pressable>
+              </View>
               {selected && editor}
             </View>
           );

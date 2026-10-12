@@ -163,3 +163,9 @@ The frontend calls the existing Pujo donation flow "subscription". The legacy Do
 The landing page Donations & sponsorships form records payments already received, separately from subscriptions. It accepts a Resident Master apartment or corporate name, Donation/Sponsorship, positive amount, paid date (IST, not future), and event name. It does not collect payment or mark residents Paid. Multiple contributions per contributor are allowed; identical request IDs replay the existing record and changed requests conflict.
 
 Apply sql/002-contributions.sql to each hosted database before deploying the feature, or run the updated db:migrate command with that database configured. The local development table has been created. No existing subscription rows are migrated or renamed.
+
+## Pause event-meal bookings
+
+Admin Events & menus offers Pause booking / Resume booking per event-day meal (all food and service options together). The authenticated pause endpoint sets Food Menu."Booking Paused". New public menus omit paused meals; new booking validation rejects stale selections. A season pass is unavailable if it includes a paused meal. Existing bookings and their management remain available. Menu edits preserve the pause flag.
+
+Before deploying, run sql/003-menu-paused.sql in each Neon database (or the updated migration command). Existing meals default to enabled. No booking rows are deleted.
