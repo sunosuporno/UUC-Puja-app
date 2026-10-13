@@ -30,6 +30,7 @@ type Meal = {
   menu: string;
   dineInPrice: number;
   takeawayPrice: number;
+  takeawayCost?: number;
 };
 
 type Day = {
@@ -39,6 +40,7 @@ type Day = {
 };
 
 type SeasonPassConfig = {
+  takeawayCost?: number;
   price: number;
   mealType: string;
   includedDays: string[];
@@ -333,6 +335,7 @@ function normalizeSeasonPassConfig(
 
   return {
     price: value.price,
+    takeawayCost: value.takeawayCost ?? 30,
     mealType: value.mealType || DEFAULT_SEASON_PASS_CONFIG.mealType,
     includedDays: value.includedDays,
     description: value.description || "",
@@ -696,7 +699,7 @@ export default function App() {
     }, 0);
   const passTakeawayQuantity = (day: string) => Math.min(activeSeasonPasses, Math.max(0, seasonTakeawayQuantities[day] || 0));
   const passDaySummary = (day: string) => `${day}: ${activeSeasonPasses - passTakeawayQuantity(day)} dine-in, ${passTakeawayQuantity(day)} takeaway`;
-  const seasonTakeawayExtra = seasonPassLunchDays.reduce((sum, day) => sum + passTakeawayQuantity(day) * 30, 0);
+  const seasonTakeawayExtra = seasonPassLunchDays.reduce((sum, day) => sum + passTakeawayQuantity(day) * (seasonPassConfig?.takeawayCost ?? 30), 0);
   const couponTotal = activeSeasonPasses * currentSeasonPassPrice + seasonTakeawayExtra + granularTotal;
   const total = couponTotal + (donationSelected ? donationAmount : 0);
   const individualBookingItems: BookingItemPayload[] = days
@@ -745,7 +748,7 @@ export default function App() {
           const takeaway = passTakeawayQuantity(dayName);
           return (["Dine-In", "Takeaway"] as const).map(serviceType => {
             const quantity = serviceType === "Takeaway" ? takeaway : activeSeasonPasses - takeaway;
-            const unitPaise = basePaise + (serviceType === "Takeaway" ? 3000 : 0);
+            const unitPaise = basePaise + (serviceType === "Takeaway" ? Math.round((seasonPassConfig?.takeawayCost ?? 30) * 100) : 0);
             return {
               dayName,
               dayDate: days.find((day) => day.name === dayName)?.date || "",
@@ -1192,7 +1195,7 @@ export default function App() {
       );
       return;
     }
-    if (itemUpgrades.length === 0 || upgradeTotal <= 0) {
+    if (itemUpgrades.length === 0) {
       setBookingSubmissionError(
         "Select at least one dine-in item to switch to takeaway."
       );
@@ -2350,7 +2353,7 @@ export default function App() {
             <Text style={styles.summaryTotal}>{currency(upgradeTotal)}</Text>
           </View>
           <Pressable
-            disabled={upgradeTotal <= 0}
+            disabled={selectedUpgradeItems.length === 0}
             onPress={() => {
               upgradeRequestIdRef.current = createClientRequestId("upgrade");
               setPaymentPurpose("upgrade");
@@ -2363,8 +2366,8 @@ export default function App() {
             }}
             style={({ pressed }) => [
               styles.paymentNext,
-              upgradeTotal <= 0 && styles.paymentNextDisabled,
-              pressed && upgradeTotal > 0 && styles.pressed,
+              selectedUpgradeItems.length === 0 && styles.paymentNextDisabled,
+              pressed && selectedUpgradeItems.length > 0 && styles.pressed,
             ]}
           >
             <Text style={styles.paymentNextText}>Pay upgrade</Text>
@@ -2876,7 +2879,7 @@ export default function App() {
             />
             {activeSeasonPasses > 0 && (
               <View style={{ gap: 12, marginTop: 18 }}>
-                <Text style={styles.seasonSubtitle}>Split each day’s passes between dine-in and takeaway. Takeaway adds ₹30 per person per day.</Text>
+                <Text style={styles.seasonSubtitle}>Split each day’s passes between dine-in and takeaway. Takeaway adds {currency(seasonPassConfig?.takeawayCost ?? 30)} per person per day.</Text>
                 {seasonPassLunchDays.map(day => (
                   <View key={day} style={{ gap: 8 }}>
                     <Text style={styles.seasonSubtitle}>{day}</Text>
@@ -2886,7 +2889,7 @@ export default function App() {
                         const quantity = service === "Takeaway" ? takeaway : activeSeasonPasses - takeaway;
                         return (
                           <View key={service} style={{ gap: 8, flex: 1, minWidth: 180 }}>
-                            <Text style={styles.seasonSubtitle}>{service === "Takeaway" ? "Takeaway (+₹30/person)" : "Dine-in"}</Text>
+                            <Text style={styles.seasonSubtitle}>{service === "Takeaway" ? `Takeaway (+${currency(seasonPassConfig?.takeawayCost ?? 30)}/person)` : "Dine-in"}</Text>
                             <QuantityControl
                               quantity={quantity}
                               maxQuantity={activeSeasonPasses}
@@ -2930,7 +2933,7 @@ export default function App() {
             {day.meals.map((meal) => {
               const quantity = getMealQuantities(meal.id);
               const expanded = expandedMenu === meal.id;
-              const takeawayExtra = meal.takeawayPrice - meal.dineInPrice;
+              const takeawayExtra = meal.takeawayCost ?? (meal.takeawayPrice - meal.dineInPrice);
               const takeawayPriceHint =
                 takeawayExtra > 0
                   ? `${currency(takeawayExtra)} extra`

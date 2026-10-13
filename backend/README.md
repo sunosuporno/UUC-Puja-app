@@ -169,3 +169,24 @@ Apply sql/002-contributions.sql to each hosted database before deploying the fea
 Admin Events & menus offers Pause booking / Resume booking per event-day meal (all food and service options together). The authenticated pause endpoint sets Food Menu."Booking Paused". New public menus omit paused meals; new booking validation rejects stale selections. A season pass is unavailable if it includes a paused meal. Existing bookings and their management remain available. Menu edits preserve the pause flag.
 
 Before deploying, run sql/003-menu-paused.sql in each Neon database (or the updated migration command). Existing meals default to enabled. No booking rows are deleted.
+
+## Separate takeaway cost
+
+Run sql/004-takeaway-cost.sql in the target database before deploying this version.
+The migration adds Food Menu."Takeaway Cost" and initializes every row to Rs. 30,
+including Season Pass, independently of legacy prices. New rows default to Rs. 30.
+Reruns preserve configured costs. Local migration is applied, with all 18 rows at Rs. 30.
+If an earlier version of this migration was already applied, explicitly initialize
+existing costs with `UPDATE "Food Menu" SET "Takeaway Cost" = 30;` once.
+
+New takeaway bookings use current dine-in price + Takeaway Cost. Existing dine-in
+coupons upgrade at their original stored unit price + current Takeaway Cost.
+Season-pass takeaway uses the Season Pass row's cost per person per included day.
+The event editor exposes base prices and the separate cost; booking layouts stay
+the same. Legacy total-price columns remain for deployment compatibility and are
+derived on menu saves. Bookings and Booking Items are never repriced by migration.
+
+Production rollout: run the migration on the correct Neon branch/database, confirm
+Food Menu costs, then deploy backend and frontend. Avoid menu edits during rollout.
+Smoke-check an old dine-in booking and a new takeaway selection before collecting
+payment. Existing browser sessions should refresh after deployment.

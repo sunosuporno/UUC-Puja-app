@@ -16,9 +16,9 @@ type Row = {
   "Meal Time": string;
   "Menu Veg": string;
   "Menu Non-Veg": string;
-  "Veg Takeaway Price": number | null;
+  "Takeaway Cost": number | null;
   "Veg Dine-In Price": number | null;
-  "Non-veg Takeaway Price": number | null;
+
   "Non-Veg Dine-In Price": number | null;
   Date: string | null;
 };
@@ -27,17 +27,17 @@ const blank: Row = {
   "Meal Time": "Lunch",
   "Menu Veg": "",
   "Menu Non-Veg": "",
-  "Veg Takeaway Price": null,
+  "Takeaway Cost": 30,
   "Veg Dine-In Price": null,
-  "Non-veg Takeaway Price": null,
+
   "Non-Veg Dine-In Price": null,
   Date: null,
 };
 const prices = [
   "Veg Dine-In Price",
-  "Veg Takeaway Price",
+  "Takeaway Cost",
   "Non-Veg Dine-In Price",
-  "Non-veg Takeaway Price",
+
 ] as const;
 export function MenuAdmin({
   onBack,
@@ -190,11 +190,11 @@ export function MenuAdmin({
       )}
       {!pass && field("Menu Non-Veg", "Non-veg menu", true)}
       <View style={s.row}>
-        {(pass ? (["Veg Dine-In Price"] as const) : prices).map((key) => (
+        {(pass ? (["Veg Dine-In Price", "Takeaway Cost"] as const) : prices).map((key) => (
           <View key={key} style={s.field}>
-            <Text style={s.label}>{pass ? "Season pass price" : key}</Text>
+            <Text style={s.label}>{key === "Takeaway Cost" ? "Takeaway cost (extra per coupon)" : pass ? "Season pass price" : key}</Text>
             <TextInput
-              accessibilityLabel={pass ? "Season pass price" : key}
+              accessibilityLabel={key === "Takeaway Cost" ? "Takeaway cost (extra per coupon)" : pass ? "Season pass price" : key}
               keyboardType="decimal-pad"
               value={row[key] === null ? "" : String(row[key])}
               style={s.input}

@@ -59,6 +59,7 @@ export const paymentSchema = z
   .refine((p) => p.paymentMethod === "cash" || !!p.paymentReference, {
     message: "A cheque number or UPI transaction ID is required",
   });
+export const upgradePaymentSchema = paymentSchema.safeExtend({ payableAmount: money });
 export const itemSchema = z.object({
   dayName: z.string().trim().min(1).max(100),
   dayDate: dateSchema,
@@ -116,9 +117,8 @@ export function menuFromRows(rows: MenuRow[], activeOnly = true) {
         dineInPrice: Number(
           row[non ? "Non-Veg Dine-In Price" : "Veg Dine-In Price"],
         ),
-        takeawayPrice: Number(
-          row[non ? "Non-veg Takeaway Price" : "Veg Takeaway Price"],
-        ),
+        takeawayCost: Number(row["Takeaway Cost"]),
+        takeawayPrice: (cents(row[non ? "Non-Veg Dine-In Price" : "Veg Dine-In Price"]) + cents(row["Takeaway Cost"])) / 100,
       });
     }
   }
@@ -149,6 +149,7 @@ export function menuFromRows(rows: MenuRow[], activeOnly = true) {
     )
       seasonPass = {
         price,
+        takeawayCost: Number(pass["Takeaway Cost"]),
         mealType: pass["Meal Time"] || "Lunch",
         includedDays,
         includedDates,
@@ -185,7 +186,7 @@ export function validatePrices(
       const unit =
         (base +
           (idx < cents(pass.price) % pass.includedDays.length ? 1 : 0) +
-          (i.serviceType === "Takeaway" ? 3000 : 0)) /
+          (i.serviceType === "Takeaway" ? cents(pass.takeawayCost) : 0)) /
         100;
       if (cents(i.unitPrice) !== cents(unit))
         fail("Season pass price changed. Refresh the menu.");

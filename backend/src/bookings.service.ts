@@ -26,6 +26,7 @@ import {
   menuFromRows,
   parse,
   paymentSchema,
+  upgradePaymentSchema,
   phoneSchema,
   requestIdSchema,
   today,
@@ -47,6 +48,7 @@ const ITEM_COLUMNS = [
   "Day Date",
 ];
 const MENU_COLUMNS = [
+  "Takeaway Cost",
   "Day",
   "Meal Time",
   "Menu Veg",
@@ -73,9 +75,10 @@ export const menuRowSchema = z.object({
   "Meal Time": z.string().trim().min(1).max(100),
   "Menu Veg": z.string().trim().max(4000).default(""),
   "Menu Non-Veg": z.string().trim().max(4000).default(""),
-  "Veg Takeaway Price": z.number().positive().max(100000).nullable(),
+  "Veg Takeaway Price": z.number().positive().max(200000).nullable().optional(),
   "Veg Dine-In Price": z.number().positive().max(100000).nullable(),
-  "Non-veg Takeaway Price": z.number().positive().max(100000).nullable(),
+  "Non-veg Takeaway Price": z.number().positive().max(200000).nullable().optional(),
+  "Takeaway Cost": z.number().finite().nonnegative().max(100000).multipleOf(0.01).optional(),
   "Non-Veg Dine-In Price": z.number().positive().max(100000).nullable(),
   Date: dateSchema.nullable(),
 });
@@ -443,22 +446,17 @@ export class BookingsService {
           m.mealTime === item.mealType && m.foodType === item.foodType,
       );
     const isPass = item.source === "Season Pass";
-    const extra = isPass
-      ? 3000
-      : meal
-        ? cents(meal.takeawayPrice) - cents(item.unitPrice)
-        : 0;
+    const cost = isPass ? menu.seasonPass?.takeawayCost : meal?.takeawayCost;
+    const extra = cost === undefined ? 0 : cents(cost);
     const eligible =
       item.dayDate >= today() &&
       (item.serviceType === "Dine-In" || (isPass && item.serviceType === "")) &&
-      extra > 0;
+      cost !== undefined && extra >= 0;
     return {
       ...item,
       id: itemKey(r["Booking Reference"], item),
       bookingReference: r["Booking Reference"],
-      takeawayUnitPrice: isPass
-        ? (cents(item.unitPrice) + 3000) / 100
-        : meal?.takeawayPrice || 0,
+      takeawayUnitPrice: (cents(item.unitPrice) + extra) / 100,
       extraUnitPrice: eligible ? extra / 100 : 0,
       extraTotal: eligible ? (extra * item.quantity) / 100 : 0,
       upgradeable: eligible,
@@ -499,7 +497,7 @@ export class BookingsService {
   }
   async upgrade(input: any) {
     const p = parse(locationSchema, input);
-    const payment = parse(paymentSchema, input);
+    const payment = parse(upgradePaymentSchema, input);
     const id = parse(requestIdSchema, input.upgradeRequestId);
     const reference = input.bookingReference
       ? parse(z.string().regex(/^[A-Za-z0-9_-]{1,80}$/), input.bookingReference)
@@ -933,13 +931,25 @@ export class BookingsService {
       Object.fromEntries(
         Object.entries(r).map(([k, v]) => [
           k,
-          k.includes("Price") && v !== null ? Number(v) : v,
+          (k.includes("Price") || k === "Takeaway Cost") && v !== null ? Number(v) : v,
         ]),
       ),
     );
   }
   async saveMenu(input: any) {
     const row = parse(menuRowSchema, input.row);
+    // Support an older event editor during rollout, but never infer from booked prices.
+    if (row["Takeaway Cost"] === undefined) {
+      const costs = [
+        row["Veg Takeaway Price"] != null && row["Veg Dine-In Price"] != null ? cents(row["Veg Takeaway Price"]) - cents(row["Veg Dine-In Price"]) : null,
+        row["Non-veg Takeaway Price"] != null && row["Non-Veg Dine-In Price"] != null ? cents(row["Non-veg Takeaway Price"]) - cents(row["Non-Veg Dine-In Price"]) : null,
+      ].filter((v): v is number => v !== null);
+      if (row.Day !== "Season Pass" && costs.some(v => v < 0 || v !== costs[0])) fail("Enter one consistent takeaway cost for this meal.");
+      row["Takeaway Cost"] = row.Day === "Season Pass" ? 30 : (costs[0] ?? 3000) / 100;
+    }
+    row["Veg Takeaway Price"] = row["Veg Dine-In Price"] === null ? null : (cents(row["Veg Dine-In Price"]) + cents(row["Takeaway Cost"])) / 100;
+    row["Non-veg Takeaway Price"] = row["Non-Veg Dine-In Price"] === null ? null : (cents(row["Non-Veg Dine-In Price"]) + cents(row["Takeaway Cost"])) / 100;
+
     const original = input.original
       ? parse(
           z.object({ Day: z.string(), "Meal Time": z.string() }),

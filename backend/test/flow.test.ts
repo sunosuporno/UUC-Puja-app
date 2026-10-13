@@ -23,9 +23,10 @@ const menu = {
   "Meal Time": "Lunch",
   "Menu Veg": "Rice and vegetables",
   "Menu Non-Veg": "Chicken and rice",
+  "Takeaway Cost": 30,
   "Veg Takeaway Price": 130,
   "Veg Dine-In Price": 100,
-  "Non-veg Takeaway Price": 160,
+  "Non-veg Takeaway Price": 170,
   "Non-Veg Dine-In Price": 140,
   Date: "2099-10-17",
 };
@@ -78,6 +79,8 @@ before(async () => {
 before(async () => {
   await db.pool.query(readFileSync(new URL("../sql/002-contributions.sql", import.meta.url), "utf8"));
   await db.pool.query(readFileSync(new URL("../sql/003-menu-paused.sql", import.meta.url), "utf8"));
+  await db.pool.query('TRUNCATE "Food Menu"');
+  await db.pool.query(readFileSync(new URL("../sql/004-takeaway-cost.sql", import.meta.url), "utf8"));
 });
 beforeEach(async () => {
   await db.pool.query(
@@ -105,7 +108,7 @@ test("schema preserves source tables and adds separate contributions", async () 
     { table_name: "Bookings", n: 12 },
     { table_name: "Contributions", n: 12 },
     { table_name: "Donations", n: 9 },
-    { table_name: "Food Menu", n: 10 },
+    { table_name: "Food Menu", n: 11 },
     { table_name: "Resident Master", n: 13 },
   ]);
 });
@@ -126,7 +129,9 @@ test("booking saves items and pending SMS; identical concurrent retries return o
     (await db.pool.query('SELECT * FROM "Booking Items"')).rowCount,
     1,
   );
-  assert.equal(result[0].smsStatus, "mock");
+  // A concurrent replay may observe pending before the creator finishes SMS.
+  assert.ok(result.some(r => r.smsStatus === "mock"));
+  assert.equal((await bookings.create(order())).smsStatus, "mock");
   await assert.rejects(
     bookings.create(order({ phoneNumber: "9876543211" })),
     /different booking/,
@@ -1302,4 +1307,55 @@ test("paused included meals disable new season passes but preserve existing book
   assert.ok(menuFromRows(rows, false).seasonPass);
   rows[2]["Booking Paused"] = false;
   assert.ok(menuFromRows(rows).seasonPass);
+});
+
+test("base-price changes never reprice old coupons during partial takeaway upgrades", async () => {
+  await bookings.create(order());
+  await bookings.saveMenu({row: {...menu, "Veg Dine-In Price": 200, "Takeaway Cost": 30}, original: {Day:menu.Day,"Meal Time":"Lunch"}});
+  const before = (await bookings.bookings(loc))[0];
+  const old = before.items.find((i: any) => i.serviceType === "Dine-In")!;
+  assert.equal(old.unitPrice, 100);
+  assert.equal(old.extraUnitPrice, 30);
+  assert.equal(old.takeawayUnitPrice, 130);
+  assert.equal((await bookings.menu()).days[0].meals.find((m:any)=>m.foodType==="Veg").takeawayPrice, 230);
+  await upgrade(2);
+  const items = (await bookings.bookings(loc))[0].items;
+  assert.equal(items.find((i:any)=>i.serviceType==="Dine-In")!.unitPrice, 100);
+  assert.equal(items.find((i:any)=>i.serviceType==="Takeaway")!.unitPrice, 130);
+  assert.equal(Number((await db.pool.query('SELECT "Payable Amount" FROM "Bookings"')).rows[0]["Payable Amount"]), 560);
+  const newItem = {...order().bookingItems[0], quantity:1, unitPrice:230, lineTotal:230, serviceType:"Takeaway"};
+  await bookings.create(order({bookingRequestId:"new-price-booking",payableAmount:230,bookingItems:[newItem]}));
+});
+
+test("changed surcharge is used for old coupons and stale upgrade totals are rejected", async () => {
+  await bookings.create(order());
+  await bookings.saveMenu({row:{...menu,"Veg Dine-In Price":200,"Takeaway Cost":45},original:{Day:menu.Day,"Meal Time":"Lunch"}});
+  const item=(await bookings.bookings(loc))[0].items[0];
+  assert.equal(item.extraUnitPrice,45);
+  assert.equal(item.takeawayUnitPrice,145);
+  await assert.rejects(upgrade(2), /Upgrade price changed/);
+  await upgrade(2,"upgrade-new-fee",{payableAmount:90});
+  assert.equal((await bookings.bookings(loc))[0].items.find((i:any)=>i.serviceType==="Takeaway")!.unitPrice,145);
+});
+
+test("zero surcharge and non-veg prices use the separate cost", async () => {
+  await bookings.saveMenu({row:{...menu,"Takeaway Cost":0},original:{Day:menu.Day,"Meal Time":"Lunch"}});
+  const meals=(await bookings.menu()).days[0].meals;
+  assert.equal(meals.find((m:any)=>m.foodType==="Non-Veg").takeawayPrice,140);
+  await bookings.create(order());
+  await upgrade(1,"free-takeaway-upgrade",{payableAmount:0});
+  assert.equal((await bookings.bookings(loc))[0].items.find((i:any)=>i.serviceType==="Takeaway")!.unitPrice,100);
+  await assert.rejects(bookings.saveMenu({row:{...menu,"Takeaway Cost":-1}}));
+  await assert.rejects(bookings.saveMenu({row:{...menu,"Takeaway Cost":30.001}}));
+});
+
+test("season pass uses its configured cost for new takeaway coupons and historical upgrades", async () => {
+  await bookings.saveMenu({row:{...menu,Day:"Season Pass",Date:null,"Menu Veg":"Test Event","Veg Dine-In Price":100,"Takeaway Cost":45}});
+  const item={...order().bookingItems[0],source:"Season Pass",foodType:"",quantity:1,unitPrice:100,lineTotal:100};
+  await bookings.create(order({bookingItems:[item],payableAmount:100}));
+  assert.equal((await bookings.bookings(loc))[0].items[0].extraUnitPrice,45);
+  await bookings.saveMenu({row:{...menu,Day:"Season Pass",Date:null,"Menu Veg":"Test Event","Veg Dine-In Price":200,"Takeaway Cost":50},original:{Day:"Season Pass","Meal Time":"Lunch"}});
+  await upgrade(1,"pass-new-cost",{payableAmount:50});
+  assert.equal((await bookings.bookings(loc))[0].items[0].unitPrice,150);
+  await bookings.create(order({bookingRequestId:"new-pass-price",bookingItems:[{...item,serviceType:"Takeaway",unitPrice:250,lineTotal:250}],payableAmount:250}));
 });

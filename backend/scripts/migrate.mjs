@@ -6,8 +6,9 @@ await client.connect();
 try {
   await client.query("BEGIN");
   await client.query("SELECT pg_advisory_xact_lock(hashtext('uuc-schema'))");
-  for (const file of ["001-schema.sql", "002-contributions.sql", "003-menu-paused.sql"]) {
-    await client.query(await readFile(new URL("../sql/" + file, import.meta.url), "utf8"));
+  for (const file of ["001-schema.sql", "002-contributions.sql", "003-menu-paused.sql", "004-takeaway-cost.sql"]) {
+    const sql = await readFile(new URL("../sql/" + file, import.meta.url), "utf8");
+    await client.query(sql.replace(/^BEGIN;\n|^COMMIT;\n/gm, ""));
   }
   await client.query("COMMIT");
   console.log("Schema ready. Existing rows preserved.");
